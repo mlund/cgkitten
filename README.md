@@ -1,4 +1,4 @@
-# cif2beads
+# cif2top
 
 Convert mmCIF protein structures to a coarse-grained representation.
 
@@ -14,7 +14,7 @@ with screened Coulomb (Yukawa) electrostatics. Use `--mc 0` for Henderson-Hassel
 ## Install
 
 ```bash
-cargo install --git https://github.com/mlund/cif2beads
+cargo install --git https://github.com/mlund/cif2top
 ```
 
 ## Usage
@@ -24,55 +24,38 @@ before the subcommand.
 
 ```bash
 # Convert at pH 7 with MC titration (default: 10000 sweeps)
-cif2beads structure.cif convert
+cif2top structure.cif convert -o output.pqr
 
 # Henderson-Hasselbalch only (no MC)
-cif2beads structure.cif --mc 0 convert
+cif2top structure.cif --mc 0 convert -o output.pqr
 
-# Custom pH, sweeps, and output file
-cif2beads structure.cif --mc 50000 convert --ph 4.5 -o output.pqr
+# Custom pH and sweeps
+cif2top structure.cif --mc 50000 convert --ph 4.5 -o output.pqr
 
 # Pipe from stdin
-cat structure.cif | cif2beads convert -o output.pqr
+cat structure.cif | cif2top convert -o output.pqr
 
 # Plain XYZ output (no charges)
-cif2beads structure.cif convert -o output.xyz
+cif2top structure.cif convert -o output.xyz
 
 # Custom conditions
-cif2beads structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5
+cif2top structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -o output.pqr
 
 # pH scan with terminal plot
-cif2beads structure.cif scan
+cif2top structure.cif scan
 
 # pH scan with HH only
-cif2beads structure.cif --mc 0 scan
+cif2top structure.cif --mc 0 scan
 
 # pH scan with custom range and save to file
-cif2beads structure.cif scan --ph-start 2 --ph-end 12 --ph-step 0.25 -o curve.dat
-```
-
-### Output formats
-
-The output format is determined by the `-o` filename extension:
-
-- **`.pqr`** (default, also used for stdout) —
-  [PQR format](https://userguide.mdanalysis.org/stable/formats/reference/pqr.html),
-  easily visualized in VMD or PyMOL. Includes charges and radii.
-- **`.xyz`** — Plain XYZ format (coordinates only, no charges).
-
-```
-REMARK cif2beads pH=7.00 T=298.15 I=0.100
-ATOM      1  CA  MET A   1      25.906  25.079   4.445  0.0000   2.00
-ATOM      2  CB  ASP A   2      27.340  24.430   2.614 -0.9994   2.00
-ATOM      3  CA  ZN  A   3       5.000   5.000   5.000  2.0000   2.00
-END
+cif2top structure.cif scan --ph-start 2 --ph-end 12 --ph-step 0.25 -o curve.dat
 ```
 
 ## Monte Carlo titration
 
 Charges are computed using Metropolis Monte Carlo titration by default
 (`--mc 10000`), which captures many-body electrostatic coupling between
-titratable sites. Use `--mc 0` for the faster Henderson-Hasselbalch
+titratable sites. Use `--mc 0` for the instantaneous Henderson-Hasselbalch
 independent-site approximation.
 
 ### Method
@@ -120,7 +103,7 @@ mu2 is ⟨μ²⟩. MC columns are included when `--mc` > 0.
 ## Library usage
 
 ```rust
-use cif2beads::{ChargeCalc, coarse_grain};
+use cif2top::{ChargeCalc, coarse_grain};
 
 let cif_data = std::fs::read("structure.cif").unwrap();
 let beads = coarse_grain(cif_data.as_slice());
@@ -135,20 +118,6 @@ let charged_beads = result.apply(&beads);
 
 // Serde support (with "serde" feature)
 // let calc: ChargeCalc = serde_json::from_str(r#"{"ph": 7.4, "mc": 10000}"#)?;
-```
-
-Use without the CLI:
-
-```toml
-[dependencies]
-cif2beads = { git = "https://github.com/mlund/cif2beads", default-features = false }
-```
-
-Enable serde support:
-
-```toml
-[dependencies]
-cif2beads = { git = "https://github.com/mlund/cif2beads", default-features = false, features = ["serde"] }
 ```
 
 ## License

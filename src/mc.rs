@@ -32,7 +32,7 @@ const WATER_DIELECTRIC: f64 = 78.4;
 pub fn bjerrum_length(temperature: f64) -> f64 {
     let lb_m = ELEMENTARY_CHARGE.powi(2)
         / (4.0 * PI * VACUUM_PERMITTIVITY * WATER_DIELECTRIC * BOLTZMANN_CONSTANT * temperature);
-    lb_m * 1e10
+    lb_m * 1e10 // convert m → Å
 }
 
 /// Debye screening length in Ångströms.
@@ -42,12 +42,14 @@ pub fn debye_length(temperature: f64, ionic_strength: f64) -> f64 {
     if ionic_strength <= 0.0 {
         return f64::INFINITY;
     }
+    // Factor 1000 converts mol/L to mol/m³
     let kappa_sq = 2.0 * AVOGADRO * ELEMENTARY_CHARGE.powi(2) * ionic_strength * 1000.0
         / (VACUUM_PERMITTIVITY * WATER_DIELECTRIC * BOLTZMANN_CONSTANT * temperature);
-    (1.0 / kappa_sq.sqrt()) * 1e10
+    (1.0 / kappa_sq.sqrt()) * 1e10 // convert m → Å
 }
 
 /// Convert a length to its inverse, treating infinity as zero.
+/// When ionic strength is zero, λ_D → ∞ and 1/λ_D → 0, giving unscreened Coulomb.
 fn inv_length(l: f64) -> f64 {
     if l.is_infinite() { 0.0 } else { 1.0 / l }
 }
@@ -127,6 +129,7 @@ impl TitrationMC {
 
         for (i, b) in beads.iter().enumerate() {
             if let Some(group) = crate::titratable_group_for_bead(b, &rn) {
+                // Use HH fraction to set initial discrete state; MC will equilibrate from here
                 let f_deprot = 1.0 / (1.0 + 10_f64.powf(group.pka - conditions.ph));
                 let is_protonated = f_deprot < 0.5;
                 charges.push(if is_protonated {
@@ -148,7 +151,8 @@ impl TitrationMC {
         let ns = sites.len();
         debug!("{ns} titratable sites");
 
-        // Precompute Yukawa kernel between titratable sites only: n_sites × n_sites
+        // Non-titratable beads have fixed charge and don't affect ΔU of protonation moves,
+        // so the kernel only needs titratable-titratable pairs: O(n_sites²) instead of O(n²)
         let mut kernel = vec![0.0; ns * ns];
         for i in 0..ns {
             for j in (i + 1)..ns {
@@ -271,7 +275,8 @@ impl TitrationMC {
                 self.my += dq * y;
                 self.mz += dq * zz;
 
-                // Incrementally update cached potentials (diagonal is zero)
+                // Update all φ_j incrementally: O(n_sites) instead of O(n_sites²) full recompute.
+                // Diagonal kernel[i][i] = 0, so the self-potential stays correct without branching.
                 let dq_lb = dq * self.lambda_b;
                 let row = &self.kernel[site_idx * n_sites..(site_idx + 1) * n_sites];
                 for (phi, &k) in self.phi.iter_mut().zip(row.iter()) {
@@ -304,7 +309,9 @@ impl TitrationMC {
             }
             charge_sum += self.z;
             charge_sq_sum += self.z * self.z;
-            let mu_sq = self.mz.mul_add(self.mz, self.mx.mul_add(self.mx, self.my * self.my));
+            let mu_sq = self
+                .mz
+                .mul_add(self.mz, self.mx.mul_add(self.mx, self.my * self.my));
             dipole_sum += mu_sq.sqrt();
             dipole_sq_sum += mu_sq;
         }
@@ -464,6 +471,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 res_name: group.res_name.to_string(),
                 chain_id: "A".into(),
                 res_seq: (i + 1) as i32,
+                mass: 0.0,
                 bead_type: BeadType::Backbone,
             });
             beads.push(Bead {
@@ -474,6 +482,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 res_name: group.element.to_string(),
                 chain_id: "A".into(),
                 res_seq: (i + 1) as i32,
+                mass: 0.0,
                 bead_type: BeadType::Sidechain,
             });
         }
@@ -506,6 +515,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 res_name: "ASP".into(),
                 chain_id: "A".into(),
                 res_seq: 1,
+                mass: 0.0,
                 bead_type: BeadType::Backbone,
             },
             Bead {
@@ -516,6 +526,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 res_name: "O".into(),
                 chain_id: "A".into(),
                 res_seq: 1,
+                mass: 0.0,
                 bead_type: BeadType::Sidechain,
             },
             Bead {
@@ -526,6 +537,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 res_name: "GLU".into(),
                 chain_id: "A".into(),
                 res_seq: 2,
+                mass: 0.0,
                 bead_type: BeadType::Backbone,
             },
             Bead {
@@ -536,6 +548,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 res_name: "O".into(),
                 chain_id: "A".into(),
                 res_seq: 2,
+                mass: 0.0,
                 bead_type: BeadType::Sidechain,
             },
         ];

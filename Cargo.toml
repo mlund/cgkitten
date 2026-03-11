@@ -1,11 +1,11 @@
 [package]
-name = "cif2beads"
+name = "cif2top"
 version = "0.1.0"
 edition = "2024"
 description = "Convert mmCIF protein structures to coarse-grained representation with Monte Carlo titration"
 authors = ["Mikael Lund <lyssky@icloud.com>"]
-repository = "https://github.com/mlund/cif2beads"
-documentation = "https://docs.rs/cif2beads"
+repository = "https://github.com/mlund/cif2top"
+documentation = "https://docs.rs/cif2top"
 readme = "README.md"
 license = "Apache-2.0"
 categories = ["science"]
@@ -17,7 +17,7 @@ cli = ["dep:clap", "dep:env_logger", "dep:indicatif", "dep:nu-ansi-term", "dep:r
 serde = ["dep:serde"]
 
 [[bin]]
-name = "cif2beads"
+name = "cif2top"
 path = "src/main.rs"
 required-features = ["cli"]
 

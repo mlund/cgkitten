@@ -7,8 +7,8 @@
 //!
 //! ```no_run
 //! let cif_data = std::fs::read("structure.cif").unwrap();
-//! let beads = cif2beads::coarse_grain(cif_data.as_slice());
-//! let result = cif2beads::ChargeCalc::new()
+//! let beads = cif2top::coarse_grain(cif_data.as_slice());
+//! let result = cif2top::ChargeCalc::new()
 //!     .ph(7.0)
 //!     .mc(10000)
 //!     .run(&beads);
@@ -18,6 +18,8 @@
 #![warn(missing_docs)]
 
 pub(crate) mod charge;
+/// Force field model definitions.
+pub mod forcefield;
 pub(crate) mod mc;
 pub(crate) mod mmcif;
 pub(crate) mod residue;
@@ -46,6 +48,8 @@ pub struct Bead {
     pub z: f64,
     /// Partial charge in elementary charge units.
     pub charge: f64,
+    /// Mass in Da (sum of constituent atom masses).
+    pub mass: f64,
     /// Source residue name (e.g., "ALA", "ZN").
     pub res_name: String,
     /// Chain identifier.
@@ -69,6 +73,13 @@ pub enum BeadType {
     Ctr,
     /// Metal ion.
     Ion,
+}
+
+impl BeadType {
+    /// True for bead types that carry a titratable charge (sidechain, N-/C-terminal).
+    pub fn is_titratable(self) -> bool {
+        matches!(self, Self::Sidechain | Self::Ntr | Self::Ctr)
+    }
 }
 
 impl std::fmt::Display for BeadType {
@@ -190,6 +201,7 @@ impl ChargeCalc {
         } else {
             let hh = HendersonHasselbalch;
             let rn = res_name_map(beads);
+            // Start from existing charges so non-titratable beads (e.g. metal ions) keep theirs
             let mut charges: Vec<f64> = beads.iter().map(|b| b.charge).collect();
             for (i, b) in beads.iter().enumerate() {
                 if let Some(group) = titratable_group_for_bead(b, &rn) {
@@ -290,6 +302,7 @@ fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -
                 y: record.y,
                 z: record.z,
                 charge: metal_charge(&record.res_name),
+                mass: residue::atomic_mass(&record.element),
                 res_name: record.res_name.clone(),
                 chain_id: record.chain_id.clone(),
                 res_seq: record.res_seq,
@@ -338,14 +351,16 @@ fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -
     for (key, atoms) in &residue_groups {
         let res_name = &atoms[0].res_name;
 
-        // Backbone bead at center of mass of all atoms in residue
-        let (cx, cy, cz) = center_of_mass(atoms);
+        // Backbone bead at geometric center of all atoms in residue
+        let ((cx, cy, cz), mass) = center_and_mass(atoms).unwrap();
 
+        // Charge is set to zero here; actual charges are computed later by ChargeCalc
         beads.push(Bead {
             x: cx,
             y: cy,
             z: cz,
             charge: 0.0,
+            mass,
             res_name: res_name.clone(),
             chain_id: key.chain_id.clone(),
             res_seq: key.res_seq,
@@ -367,7 +382,7 @@ fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -
             }
         }
 
-        // Titratable side-chain bead (skip SS-bonded cysteines)
+        // Disulfide bonds lock the CYS thiol, preventing it from titrating
         if res_name == "CYS" && ss_bonded.contains(key) {
             debug!(
                 "Skipping titration for SS-bonded CYS {}:{}",
@@ -382,15 +397,7 @@ fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -
 
     beads.extend(metal_beads);
 
-    let n_titratable = beads
-        .iter()
-        .filter(|b| {
-            matches!(
-                b.bead_type,
-                BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr
-            )
-        })
-        .count();
+    let n_titratable = beads.iter().filter(|b| b.bead_type.is_titratable()).count();
 
     info!(
         "{} residues, {} titratable sites",
@@ -443,33 +450,20 @@ pub(crate) fn titratable_group_for_bead(
     }
 }
 
-/// Geometric center of a set of positions.
-fn geometric_center(positions: impl Iterator<Item = (f64, f64, f64)>) -> Option<(f64, f64, f64)> {
-    let mut n = 0u32;
-    let (sx, sy, sz) = positions.fold((0.0, 0.0, 0.0), |(ax, ay, az), (x, y, z)| {
-        n += 1;
-        (ax + x, ay + y, az + z)
-    });
-    if n == 0 {
+/// Compute geometric center (unweighted) and total mass of atoms in a single pass.
+/// Uses geometric center rather than mass-weighted center; conventional for CG bead placement.
+fn center_and_mass(atoms: &[&AtomRecord]) -> Option<((f64, f64, f64), f64)> {
+    if atoms.is_empty() {
         return None;
     }
-    let n = f64::from(n);
-    Some((sx / n, sy / n, sz / n))
-}
-
-/// Compute center of mass (unweighted, i.e. geometric center).
-fn center_of_mass(atoms: &[&AtomRecord]) -> (f64, f64, f64) {
-    geometric_center(atoms.iter().map(|a| (a.x, a.y, a.z))).unwrap()
-}
-
-/// Compute the geometric center of the group's charge-center atoms.
-fn charge_center(atoms: &[&AtomRecord], group: &TitratableGroup) -> Option<(f64, f64, f64)> {
-    geometric_center(
-        atoms
-            .iter()
-            .filter(|a| group.center_atoms.contains(&a.name.as_str()))
-            .map(|a| (a.x, a.y, a.z)),
-    )
+    let (center, mass) = atoms
+        .iter()
+        .fold(((0.0, 0.0, 0.0), 0.0), |((sx, sy, sz), m), a| {
+            let am = residue::atomic_mass(&a.element);
+            ((sx + a.x, sy + a.y, sz + a.z), m + am)
+        });
+    let n = atoms.len() as f64;
+    Some(((center.0 / n, center.1 / n, center.2 / n), mass))
 }
 
 /// Create a titratable bead at the group's charge center (charge = 0.0).
@@ -479,12 +473,19 @@ fn make_titratable_bead(
     group: &TitratableGroup,
     bead_type: BeadType,
 ) -> Option<Bead> {
-    let (x, y, z) = charge_center(atoms, group)?;
+    let center_atoms: Vec<&AtomRecord> = atoms
+        .iter()
+        .filter(|a| group.center_atoms.contains(&a.name.as_str()))
+        .copied()
+        .collect();
+    let ((x, y, z), mass) = center_and_mass(&center_atoms)?;
     Some(Bead {
         x,
         y,
         z,
         charge: 0.0,
+        mass,
+        // Named by element (O, N, S) to distinguish from backbone beads (which use residue name)
         res_name: group.element.to_string(),
         chain_id: key.chain_id.clone(),
         res_seq: key.res_seq,
@@ -514,9 +515,11 @@ fn disulfide_bonds_to_keys(bonds: &[DisulfideBond]) -> HashSet<ResidueKey> {
 }
 
 /// Maximum SG-SG distance (Å) to consider a disulfide bond.
+/// Typical S-S bond is ~2.05 Å; 2.5 Å allows for crystallographic uncertainty.
 const DISULFIDE_CUTOFF: f64 = 2.5;
 
-/// Find CYS residues involved in disulfide bonds by SG-SG proximity (fallback).
+/// Find CYS residues involved in disulfide bonds by SG-SG proximity.
+/// Used as fallback when _struct_conn records are absent from the mmCIF file.
 fn find_disulfide_bonds_geometric(
     residue_groups: &[(ResidueKey, Vec<&AtomRecord>)],
 ) -> HashSet<ResidueKey> {

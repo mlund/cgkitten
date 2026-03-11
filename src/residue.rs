@@ -27,6 +27,35 @@ pub fn is_metal_ion(record: &AtomRecord) -> bool {
     record.record_name == "HETATM" && METAL_IONS.contains(&record.res_name.as_str())
 }
 
+/// Atomic mass in Da from element symbol.
+pub fn atomic_mass(element: &str) -> f64 {
+    match element {
+        "H" => 1.008,
+        "C" => 12.011,
+        "N" => 14.007,
+        "O" => 15.999,
+        "S" => 32.06,
+        "SE" => 78.971,
+        "P" => 30.974,
+        // Both uppercase (mmCIF) and mixed case (PDB-style) element symbols
+        "FE" | "Fe" => 55.845,
+        "ZN" | "Zn" => 65.38,
+        "MG" | "Mg" => 24.305,
+        "CA" | "Ca" => 40.078,
+        "MN" | "Mn" => 54.938,
+        "CU" | "Cu" => 63.546,
+        "CO" | "Co" => 58.933,
+        "NI" | "Ni" => 58.693,
+        "CD" | "Cd" => 112.414,
+        "NA" | "Na" => 22.990,
+        "K" => 39.098,
+        _ => {
+            log::warn!("Unknown element '{element}', using mass 0.0");
+            0.0
+        }
+    }
+}
+
 /// A titratable group definition.
 #[derive(Clone, Debug)]
 pub struct TitratableGroup {
