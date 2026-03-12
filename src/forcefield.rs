@@ -73,7 +73,8 @@ impl ForceField for Calvados3 {
                     epsilon: *epsilon,
                     lambda: *lambda,
                 }),
-            BeadType::Ion => None, // ions carry only Coulomb charge, no LJ/AH params
+            // Ions get a minimal LJ entry so downstream tools (e.g. duello) have σ/ε defined
+            BeadType::Ion => Some(CALVADOS3_SITE),
             BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr => Some(CALVADOS3_SITE),
         }
     }

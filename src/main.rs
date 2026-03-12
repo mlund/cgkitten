@@ -102,7 +102,7 @@ fn read_beads(input: &Option<PathBuf>) -> io::Result<Vec<Bead>> {
 }
 
 /// Format beads as PQR file.
-fn format_pqr(beads: &[Bead], calc: &ChargeCalc) -> String {
+fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     use cif2top::BeadType;
     let mut out = String::new();
     writeln!(
@@ -126,7 +126,7 @@ fn format_pqr(beads: &[Bead], calc: &ChargeCalc) -> String {
             "ATOM",
             i + 1,
             atom_name,
-            b.res_name,
+            &names[i],
             b.chain_id,
             b.res_seq,
             b.x,
@@ -142,7 +142,7 @@ fn format_pqr(beads: &[Bead], calc: &ChargeCalc) -> String {
 }
 
 /// Format beads as plain XYZ file (no charges).
-fn format_xyz(beads: &[Bead], calc: &ChargeCalc) -> String {
+fn format_xyz(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     let mut out = String::new();
     writeln!(out, "{}", beads.len()).unwrap();
     writeln!(
@@ -151,11 +151,11 @@ fn format_xyz(beads: &[Bead], calc: &ChargeCalc) -> String {
         calc.ph, calc.temperature, calc.ionic_strength,
     )
     .unwrap();
-    for b in beads {
+    for (i, b) in beads.iter().enumerate() {
         writeln!(
             out,
             "{:<5} {:>10.4} {:>10.4} {:>10.4}",
-            b.res_name, b.x, b.y, b.z
+            &names[i], b.x, b.y, b.z
         )
         .unwrap();
     }
@@ -174,19 +174,20 @@ struct AtomType {
     bead_type: cif2top::BeadType,
 }
 
-/// Format topology as YAML with unique atom types.
+/// Assign each bead to a topology type and return per-bead type names.
 ///
 /// Backbone beads use their residue name (e.g., ALA, MET).
 /// Titratable sites with the same element, mass, and charge (within 1%)
 /// are merged into a single type; otherwise they get unique numbered
 /// names (e.g., O1, O2, N1).
-fn format_topology(beads: &[Bead], ff: Option<&dyn cif2top::forcefield::ForceField>) -> String {
+fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
     use cif2top::BeadType;
 
     let mut types: Vec<AtomType> = Vec::new();
     let mut counters: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Per-bead type name, matching the topology entry
+    let mut bead_type_names: Vec<String> = Vec::with_capacity(beads.len());
 
-    // Assign each bead to an existing or new atom type
     for b in beads {
         match b.bead_type {
             BeadType::Backbone | BeadType::Ion => {
@@ -200,21 +201,26 @@ fn format_topology(beads: &[Bead], ff: Option<&dyn cif2top::forcefield::ForceFie
                         bead_type: b.bead_type,
                     });
                 }
+                bead_type_names.push(b.res_name.clone());
             }
             BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr => {
                 // Merge sites with same element, mass, and charge (within tolerance)
                 // to reduce topology size without losing physical accuracy
-                let merged = types.iter().any(|t| {
+                let existing = types.iter().find(|t| {
                     t.res_name == b.res_name
                         && t.mass == b.mass
                         && (t.charge - b.charge).abs() < CHARGE_MERGE_TOL
                         && t.bead_type.is_titratable()
                 });
-                if !merged {
+                if let Some(t) = existing {
+                    bead_type_names.push(t.name.clone());
+                } else {
                     let counter = counters.entry(b.res_name.clone()).or_insert(0);
                     *counter += 1;
+                    let name = format!("{}{}", b.res_name, counter);
+                    bead_type_names.push(name.clone());
                     types.push(AtomType {
-                        name: format!("{}{}", b.res_name, counter),
+                        name,
                         charge: b.charge,
                         mass: b.mass,
                         res_name: b.res_name.clone(),
@@ -234,8 +240,16 @@ fn format_topology(beads: &[Bead], ff: Option<&dyn cif2top::forcefield::ForceFie
         );
     }
 
+    (types, bead_type_names)
+}
+
+/// Format topology as YAML with unique atom types.
+fn format_topology(
+    types: &[AtomType],
+    ff: Option<&dyn cif2top::forcefield::ForceField>,
+) -> String {
     let mut out = String::from("atoms:\n");
-    for t in &types {
+    for t in types {
         if let Some(params) = ff.and_then(|f| f.params(&t.res_name, t.bead_type)) {
             writeln!(
                 out,
@@ -305,20 +319,23 @@ fn main() -> io::Result<()> {
                 result.multipole.charge, result.multipole.dipole
             );
 
+            // Assign topology type names first so coordinate files use matching names
+            let (types, names) = assign_types(&charged);
+
             let is_xyz = output
                 .extension()
                 .is_some_and(|ext| ext == "xyz");
             let text = if is_xyz {
-                format_xyz(&charged, &calc)
+                format_xyz(&charged, &names, &calc)
             } else {
-                format_pqr(&charged, &calc)
+                format_pqr(&charged, &names, &calc)
             };
 
             let mut file = File::create(&output)?;
             file.write_all(text.as_bytes())?;
 
             {
-                let yaml = format_topology(&charged, ff.as_deref());
+                let yaml = format_topology(&types, ff.as_deref());
                 let mut file = File::create(&top)?;
                 file.write_all(yaml.as_bytes())?;
                 info!("Topology saved to {}", top.display());
