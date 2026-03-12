@@ -2,9 +2,15 @@
 
 Convert mmCIF protein structures to a coarse-grained representation.
 
-Each amino acid residue becomes a single bead at its geometric center.
-Titratable residues (ASP, GLU, HIS, CYS, TYR, LYS, ARG) get an additional bead
-at the charge center. N- and C-terminal charges are always included.
+Two coarse-graining policies are available:
+
+- **multi** (default): Each amino acid becomes a backbone bead at its geometric center.
+  Titratable residues (ASP, GLU, HIS, CYS, TYR, LYS, ARG) get an additional bead
+  at the charge center.
+- **single**: Each amino acid becomes exactly one bead. Titratable residues get
+  unique numbered type names (ASP1, ASP2, ...) to carry distinct charges.
+
+N- and C-terminal charges are always included as separate beads in both policies.
 Water and non-protein molecules are removed; coordinated metal ions are retained.
 Multi-chain structures are fully supported with per-chain terminal beads.
 
@@ -19,12 +25,15 @@ cargo install --git https://github.com/mlund/cif2top
 
 ## Usage
 
-Shared flags (`input`, `--temperature`, `--ionic-strength`, `--mc`) are placed
-before the subcommand.
+Shared flags (`input`, `--temperature`, `--ionic-strength`, `--mc`, `--cg`) are
+placed before the subcommand.
 
 ```bash
 # Convert at pH 7 with MC titration (default: 10000 sweeps)
 cif2top structure.cif convert -o output.pqr
+
+# Single-bead coarse-graining (one bead per residue)
+cif2top structure.cif --cg single convert -o output.pqr --top topology.yaml
 
 # Henderson-Hasselbalch only (no MC)
 cif2top structure.cif --mc 0 convert -o output.pqr
@@ -43,6 +52,9 @@ cif2top structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -
 
 # pH scan with terminal plot
 cif2top structure.cif scan
+
+# pH scan with single-bead policy
+cif2top structure.cif --cg single scan
 
 # pH scan with HH only
 cif2top structure.cif --mc 0 scan
@@ -103,10 +115,15 @@ mu2 is ⟨μ²⟩. MC columns are included when `--mc` > 0.
 ## Library usage
 
 ```rust
-use cif2top::{ChargeCalc, coarse_grain};
+use cif2top::{ChargeCalc, coarse_grain, coarse_grain_with, SingleBead};
 
 let cif_data = std::fs::read("structure.cif").unwrap();
+
+// Multi-bead (default)
 let beads = coarse_grain(cif_data.as_slice());
+
+// Single-bead policy
+let beads = coarse_grain_with(cif_data.as_slice(), &SingleBead);
 
 // Henderson-Hasselbalch (default)
 let result = ChargeCalc::new().ph(7.4).run(&beads);

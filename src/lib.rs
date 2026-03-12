@@ -73,12 +73,17 @@ pub enum BeadType {
     Ctr,
     /// Metal ion.
     Ion,
+    /// Single-bead residue that is also titratable (used by SingleBead policy).
+    Titratable,
 }
 
 impl BeadType {
-    /// True for bead types that carry a titratable charge (sidechain, N-/C-terminal).
+    /// True for bead types that carry a titratable charge (sidechain, N-/C-terminal, titratable).
     pub fn is_titratable(self) -> bool {
-        matches!(self, Self::Sidechain | Self::Ntr | Self::Ctr)
+        matches!(
+            self,
+            Self::Sidechain | Self::Ntr | Self::Ctr | Self::Titratable
+        )
     }
 }
 
@@ -90,6 +95,7 @@ impl std::fmt::Display for BeadType {
             Self::Ntr => write!(f, "NTR"),
             Self::Ctr => write!(f, "CTR"),
             Self::Ion => write!(f, "ion"),
+            Self::Titratable => write!(f, "titratable"),
         }
     }
 }
@@ -252,10 +258,100 @@ impl ChargeResult {
 }
 
 // ---------------------------------------------------------------------------
-// Public function
+// Coarse-graining trait and implementations
 // ---------------------------------------------------------------------------
 
-/// Convert mmCIF data to coarse-grained beads (geometry only).
+/// Convert one amino acid residue into beads (backbone/sidechain only, not terminals).
+pub trait CoarseGrain {
+    /// Convert one amino acid residue into beads.
+    fn residue_to_beads(
+        &self,
+        key: &ResidueKey,
+        atoms: &[&AtomRecord],
+        is_ss_bonded: bool,
+    ) -> Vec<Bead>;
+}
+
+/// Look up the titratable group for a residue, returning `None` for SS-bonded CYS.
+fn titratable_group_unless_ss(
+    key: &ResidueKey,
+    res_name: &str,
+    is_ss_bonded: bool,
+) -> Option<&'static residue::TitratableGroup> {
+    if res_name == "CYS" && is_ss_bonded {
+        debug!(
+            "Skipping titration for SS-bonded CYS {}:{}",
+            key.chain_id, key.res_seq
+        );
+        return None;
+    }
+    residue::find_titratable_group(res_name)
+}
+
+/// Create a residue bead at the geometric center of the given atoms.
+fn make_residue_bead(key: &ResidueKey, atoms: &[&AtomRecord], bead_type: BeadType) -> Bead {
+    let ((cx, cy, cz), mass) = center_and_mass(atoms).unwrap();
+    Bead {
+        x: cx,
+        y: cy,
+        z: cz,
+        charge: 0.0,
+        mass,
+        res_name: atoms[0].res_name.clone(),
+        chain_id: key.chain_id.clone(),
+        res_seq: key.res_seq,
+        bead_type,
+    }
+}
+
+/// Multi-bead coarse-graining: one backbone bead + optional sidechain bead per titratable residue.
+pub struct MultiBead;
+
+impl CoarseGrain for MultiBead {
+    fn residue_to_beads(
+        &self,
+        key: &ResidueKey,
+        atoms: &[&AtomRecord],
+        is_ss_bonded: bool,
+    ) -> Vec<Bead> {
+        let mut beads = vec![make_residue_bead(key, atoms, BeadType::Backbone)];
+
+        if let Some(group) = titratable_group_unless_ss(key, &atoms[0].res_name, is_ss_bonded)
+            && let Some(bead) = make_titratable_bead(key, atoms, group, BeadType::Sidechain)
+        {
+            beads.push(bead);
+        }
+
+        beads
+    }
+}
+
+/// Single-bead coarse-graining: one bead per residue. Titratable residues get `BeadType::Titratable`.
+pub struct SingleBead;
+
+impl CoarseGrain for SingleBead {
+    fn residue_to_beads(
+        &self,
+        key: &ResidueKey,
+        atoms: &[&AtomRecord],
+        is_ss_bonded: bool,
+    ) -> Vec<Bead> {
+        let bead_type =
+            if titratable_group_unless_ss(key, &atoms[0].res_name, is_ss_bonded).is_some() {
+                BeadType::Titratable
+            } else {
+                BeadType::Backbone
+            };
+
+        vec![make_residue_bead(key, atoms, bead_type)]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public functions
+// ---------------------------------------------------------------------------
+
+/// Convert mmCIF data to coarse-grained beads using the default multi-bead policy.
 ///
 /// Reads atom records, groups by residue, and creates backbone and titratable
 /// side-chain beads. Charges are set to 0.0 for titratable sites; use
@@ -263,6 +359,11 @@ impl ChargeResult {
 ///
 /// Metal ions retain their formal charges.
 pub fn coarse_grain<R: BufRead>(reader: R) -> Vec<Bead> {
+    coarse_grain_with(reader, &MultiBead)
+}
+
+/// Convert mmCIF data to coarse-grained beads using the given policy.
+pub fn coarse_grain_with<R: BufRead>(reader: R, policy: &dyn CoarseGrain) -> Vec<Bead> {
     let parse_options = ParseOptions::default();
     let parsed = mmcif::parse_mmcif(reader, &parse_options);
     debug!(
@@ -271,7 +372,7 @@ pub fn coarse_grain<R: BufRead>(reader: R) -> Vec<Bead> {
         parsed.disulfide_bonds.len(),
     );
 
-    records_to_beads(&parsed.atoms, &parsed.disulfide_bonds)
+    records_to_beads(&parsed.atoms, &parsed.disulfide_bonds, policy)
 }
 
 // ---------------------------------------------------------------------------
@@ -280,14 +381,21 @@ pub fn coarse_grain<R: BufRead>(reader: R) -> Vec<Bead> {
 
 /// Unique residue key for grouping atoms.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ResidueKey {
-    chain_id: String,
-    res_seq: i32,
-    i_code: String,
+pub struct ResidueKey {
+    /// Chain identifier.
+    pub chain_id: String,
+    /// Residue sequence number.
+    pub res_seq: i32,
+    /// Insertion code.
+    pub i_code: String,
 }
 
 /// Convert atom records to coarse-grained beads (geometry only).
-fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -> Vec<Bead> {
+fn records_to_beads(
+    records: &[AtomRecord],
+    disulfide_bonds: &[DisulfideBond],
+    policy: &dyn CoarseGrain,
+) -> Vec<Bead> {
     // Group atoms by residue
     let mut residue_groups: Vec<(ResidueKey, Vec<&AtomRecord>)> = Vec::new();
     let mut key_to_index: HashMap<ResidueKey, usize> = HashMap::new();
@@ -349,25 +457,12 @@ fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -
     let mut beads = Vec::new();
 
     for (key, atoms) in &residue_groups {
-        let res_name = &atoms[0].res_name;
+        let is_ss_bonded = atoms[0].res_name == "CYS" && ss_bonded.contains(key);
 
-        // Backbone bead at geometric center of all atoms in residue
-        let ((cx, cy, cz), mass) = center_and_mass(atoms).unwrap();
+        // Delegate per-residue bead creation to the policy
+        beads.extend(policy.residue_to_beads(key, atoms, is_ss_bonded));
 
-        // Charge is set to zero here; actual charges are computed later by ChargeCalc
-        beads.push(Bead {
-            x: cx,
-            y: cy,
-            z: cz,
-            charge: 0.0,
-            mass,
-            res_name: res_name.clone(),
-            chain_id: key.chain_id.clone(),
-            res_seq: key.res_seq,
-            bead_type: BeadType::Backbone,
-        });
-
-        // Terminal beads
+        // Terminal beads (shared across all policies)
         if let Some(&(first_idx, last_idx)) = chain_first_last.get(&key.chain_id) {
             let idx = key_to_index[key];
             if idx == first_idx
@@ -380,18 +475,6 @@ fn records_to_beads(records: &[AtomRecord], disulfide_bonds: &[DisulfideBond]) -
             {
                 beads.push(bead);
             }
-        }
-
-        // Disulfide bonds lock the CYS thiol, preventing it from titrating
-        if res_name == "CYS" && ss_bonded.contains(key) {
-            debug!(
-                "Skipping titration for SS-bonded CYS {}:{}",
-                key.chain_id, key.res_seq
-            );
-        } else if let Some(group) = residue::find_titratable_group(res_name)
-            && let Some(bead) = make_titratable_bead(key, atoms, group, BeadType::Sidechain)
-        {
-            beads.push(bead);
         }
     }
 
@@ -426,11 +509,11 @@ fn compute_multipole(beads: &[Bead], charges: &[f64]) -> Multipole {
     }
 }
 
-/// Map (chain_id, res_seq) → residue name from backbone beads.
+/// Map (chain_id, res_seq) → residue name from backbone/titratable beads.
 pub(crate) fn res_name_map(beads: &[Bead]) -> HashMap<(String, i32), String> {
     beads
         .iter()
-        .filter(|b| b.bead_type == BeadType::Backbone)
+        .filter(|b| matches!(b.bead_type, BeadType::Backbone | BeadType::Titratable))
         .map(|b| ((b.chain_id.clone(), b.res_seq), b.res_name.clone()))
         .collect()
 }
@@ -444,6 +527,7 @@ pub(crate) fn titratable_group_for_bead(
         BeadType::Sidechain => res_names
             .get(&(bead.chain_id.clone(), bead.res_seq))
             .and_then(|name| residue::find_titratable_group(name)),
+        BeadType::Titratable => residue::find_titratable_group(&bead.res_name),
         BeadType::Ntr => Some(&NTERM_GROUP),
         BeadType::Ctr => Some(&CTERM_GROUP),
         _ => None,

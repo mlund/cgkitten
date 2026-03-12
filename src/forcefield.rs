@@ -65,7 +65,7 @@ const CALVADOS3_SITE: BeadParams = BeadParams {
 impl ForceField for Calvados3 {
     fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
-            BeadType::Backbone => CALVADOS3_BACKBONE
+            BeadType::Backbone | BeadType::Titratable => CALVADOS3_BACKBONE
                 .iter()
                 .find(|(name, _, _, _)| *name == res_name)
                 .map(|(_, lambda, sigma, epsilon)| BeadParams {

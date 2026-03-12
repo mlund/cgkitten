@@ -9,7 +9,7 @@ use nu_ansi_term::Color;
 use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
 
-use cif2top::{Bead, ChargeCalc, ChargeResult, coarse_grain};
+use cif2top::{Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_with};
 
 /// Convert mmCIF protein structures to coarse-grained representation.
 ///
@@ -44,6 +44,16 @@ struct CommonArgs {
     /// Monte Carlo sweeps per titratable site (0 = Henderson-Hasselbalch only).
     #[arg(long, default_value = "10000")]
     mc: usize,
+
+    /// Coarse-graining policy: "multi" (backbone + sidechain beads) or "single" (one bead per residue).
+    #[arg(long, default_value = "multi")]
+    cg: CgPolicy,
+}
+
+#[derive(Clone, clap::ValueEnum)]
+enum CgPolicy {
+    Multi,
+    Single,
 }
 
 #[derive(Subcommand)]
@@ -86,10 +96,10 @@ enum Commands {
     },
 }
 
-fn read_beads(input: &Option<PathBuf>) -> io::Result<Vec<Bead>> {
+fn read_beads(input: &Option<PathBuf>, policy: &dyn cif2top::CoarseGrain) -> io::Result<Vec<Bead>> {
     if let Some(path) = input {
         let file = File::open(path)?;
-        Ok(coarse_grain(BufReader::new(file)))
+        Ok(coarse_grain_with(BufReader::new(file), policy))
     } else if io::stdin().is_terminal() {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -97,7 +107,14 @@ fn read_beads(input: &Option<PathBuf>) -> io::Result<Vec<Bead>> {
         ))
     } else {
         let stdin = io::stdin();
-        Ok(coarse_grain(stdin.lock()))
+        Ok(coarse_grain_with(stdin.lock(), policy))
+    }
+}
+
+fn cg_policy(p: &CgPolicy) -> &'static dyn cif2top::CoarseGrain {
+    match p {
+        CgPolicy::Multi => &MultiBead,
+        CgPolicy::Single => &SingleBead,
     }
 }
 
@@ -113,7 +130,7 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     .unwrap();
     for (i, b) in beads.iter().enumerate() {
         let atom_name = match b.bead_type {
-            BeadType::Backbone => "CA",
+            BeadType::Backbone | BeadType::Titratable => "CA",
             BeadType::Sidechain => "CB",
             BeadType::Ntr => "N",
             BeadType::Ctr => "O",
@@ -203,7 +220,7 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
                 }
                 bead_type_names.push(b.res_name.clone());
             }
-            BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr => {
+            BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr | BeadType::Titratable => {
                 // Merge sites with same element, mass, and charge (within tolerance)
                 // to reduce topology size without losing physical accuracy
                 let existing = types.iter().find(|t| {
@@ -244,10 +261,7 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
 }
 
 /// Format topology as YAML with unique atom types.
-fn format_topology(
-    types: &[AtomType],
-    ff: Option<&dyn cif2top::forcefield::ForceField>,
-) -> String {
+fn format_topology(types: &[AtomType], ff: Option<&dyn cif2top::forcefield::ForceField>) -> String {
     let mut out = String::from("atoms:\n");
     for t in types {
         if let Some(params) = ff.and_then(|f| f.params(&t.res_name, t.bead_type)) {
@@ -286,6 +300,7 @@ fn main() -> io::Result<()> {
 
     let cli = Cli::parse();
     let common = &cli.common;
+    let policy = cg_policy(&common.cg);
 
     match cli.command {
         Commands::Convert {
@@ -309,7 +324,7 @@ fn main() -> io::Result<()> {
                 ));
             }
 
-            let beads = read_beads(&common.input)?;
+            let beads = read_beads(&common.input, policy)?;
             calc.log_conditions();
             let result = calc.run(&beads);
             let charged = result.apply(&beads);
@@ -322,9 +337,7 @@ fn main() -> io::Result<()> {
             // Assign topology type names first so coordinate files use matching names
             let (types, names) = assign_types(&charged);
 
-            let is_xyz = output
-                .extension()
-                .is_some_and(|ext| ext == "xyz");
+            let is_xyz = output.extension().is_some_and(|ext| ext == "xyz");
             let text = if is_xyz {
                 format_xyz(&charged, &names, &calc)
             } else {
@@ -347,7 +360,7 @@ fn main() -> io::Result<()> {
             ph_step,
             output,
         } => {
-            let beads = read_beads(&common.input)?;
+            let beads = read_beads(&common.input, policy)?;
             ChargeCalc::new()
                 .temperature(common.temperature)
                 .ionic_strength(common.ionic_strength)
