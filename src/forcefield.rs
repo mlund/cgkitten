@@ -183,7 +183,7 @@ pub fn hydrophobic_pairs(
 /// Indented to sit as a sibling of `default:` inside `system: energy: nonbonded:`.
 pub fn format_pair_yaml(pair: &PairInteraction) -> String {
     format!(
-        "      [{}, {}]:\n        - !AshbaughHatch {{σ: {:.4}, ε: {:.4}, λ: {:.4}}}\n",
+        "      [{}, {}]:\n        - !AshbaughHatch {{σ: {:.4}, ε: {:.4}, λ: {:.4}, cutoff: 20.0}}\n",
         pair.name_a, pair.name_b, pair.sigma, pair.epsilon, pair.lambda,
     )
 }

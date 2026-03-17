@@ -296,7 +296,13 @@ fn format_topology(
     // Pair entries are siblings of `default:` under `nonbonded:`,
     // so Faunus uses these instead of the default mixing rule for
     // the specified type pairs.
+    let known: std::collections::HashSet<&str> = types.iter().map(|t| t.name.as_str()).collect();
     for pair in pairs {
+        for name in [pair.name_a.as_str(), pair.name_b.as_str()] {
+            if !known.contains(name) {
+                log::warn!("Pair references unknown atom type '{name}' — Faunus will silently ignore this entry");
+            }
+        }
         out.push_str(&cif2top::forcefield::format_pair_yaml(pair));
     }
 
