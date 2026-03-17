@@ -22,7 +22,8 @@ pub(crate) mod charge;
 pub mod forcefield;
 pub(crate) mod mc;
 pub(crate) mod mmcif;
-pub(crate) mod residue;
+/// Amino acid residue definitions and constants.
+pub mod residue;
 
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;

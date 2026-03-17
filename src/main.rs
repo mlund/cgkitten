@@ -75,6 +75,10 @@ enum Commands {
         /// Force field model for topology parameters.
         #[arg(long, default_value = "calvados3")]
         model: String,
+
+        /// Scale hydrophobic pair interactions: lambda:<factor> or epsilon:<factor>.
+        #[arg(long)]
+        scale_hydrophobic: Option<String>,
     },
     /// Scan average charge, dipole vs pH and plot titration curve.
     Scan {
@@ -261,7 +265,11 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
 }
 
 /// Format topology as YAML with unique atom types.
-fn format_topology(types: &[AtomType], ff: Option<&dyn cif2top::forcefield::ForceField>) -> String {
+fn format_topology(
+    types: &[AtomType],
+    ff: Option<&dyn cif2top::forcefield::ForceField>,
+    pairs: &[cif2top::forcefield::PairInteraction],
+) -> String {
     let mut out = String::from("atoms:\n");
     for t in types {
         if let Some(params) = ff.and_then(|f| f.params(&t.res_name, t.bead_type)) {
@@ -284,6 +292,14 @@ fn format_topology(types: &[AtomType], ff: Option<&dyn cif2top::forcefield::Forc
     if let Some(f) = ff {
         out.push_str(f.system_yaml());
     }
+
+    // Pair entries are siblings of `default:` under `nonbonded:`,
+    // so Faunus uses these instead of the default mixing rule for
+    // the specified type pairs.
+    for pair in pairs {
+        out.push_str(&cif2top::forcefield::format_pair_yaml(pair));
+    }
+
     out
 }
 
@@ -308,6 +324,7 @@ fn main() -> io::Result<()> {
             ph,
             top,
             model,
+            scale_hydrophobic,
         } => {
             let calc = ChargeCalc::new()
                 .ph(ph)
@@ -334,8 +351,34 @@ fn main() -> io::Result<()> {
                 result.multipole.charge, result.multipole.dipole
             );
 
+            let scaling: cif2top::forcefield::HydrophobicScaling = scale_hydrophobic
+                .as_deref()
+                .map(|s| {
+                    s.parse()
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+                })
+                .transpose()?
+                .unwrap_or_default();
+
             // Assign topology type names first so coordinate files use matching names
             let (types, names) = assign_types(&charged);
+
+            // Collect (name, params) for all types that have FF parameters.
+            // hydrophobic_pairs() filters this down to hydrophobic residues only,
+            // so it's safe to pass everything — non-hydrophobic types are ignored.
+            let hp_types: Vec<(String, cif2top::forcefield::BeadParams)> = types
+                .iter()
+                .filter_map(|t| {
+                    ff.as_deref()
+                        .and_then(|f| f.params(&t.res_name, t.bead_type))
+                        .map(|p| (t.name.clone(), p))
+                })
+                .collect();
+            let pairs = cif2top::forcefield::hydrophobic_pairs(
+                &hp_types,
+                cif2top::residue::HYDROPHOBIC_RESIDUES,
+                &scaling,
+            );
 
             let is_xyz = output.extension().is_some_and(|ext| ext == "xyz");
             let text = if is_xyz {
@@ -348,7 +391,7 @@ fn main() -> io::Result<()> {
             file.write_all(text.as_bytes())?;
 
             {
-                let yaml = format_topology(&types, ff.as_deref());
+                let yaml = format_topology(&types, ff.as_deref(), &pairs);
                 let mut file = File::create(&top)?;
                 file.write_all(yaml.as_bytes())?;
                 info!("Topology saved to {}", top.display());

@@ -11,6 +11,16 @@ pub const STANDARD_RESIDUES: &[&str] = &[
     "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
 ];
 
+/// Hydrophobic amino acid residues used for pair scaling.
+///
+/// Based on the Calvados 3 model convention where these residues have
+/// significant hydrophobic character (λ > ~0.3). CYS is excluded because
+/// it is treated as titratable; GLY is excluded despite high λ because
+/// its small size makes hydrophobic pairing physically insignificant.
+pub const HYDROPHOBIC_RESIDUES: &[&str] = &[
+    "ALA", "ILE", "LEU", "MET", "PHE", "PRO", "TRP", "TYR", "VAL",
+];
+
 /// Returns true if residue name is a standard amino acid.
 pub fn is_amino_acid(res_name: &str) -> bool {
     STANDARD_RESIDUES.contains(&res_name)

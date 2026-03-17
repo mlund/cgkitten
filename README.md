@@ -47,6 +47,12 @@ cat structure.cif | cif2top convert -o output.pqr
 # Plain XYZ output (no charges)
 cif2top structure.cif convert -o output.xyz
 
+# Scale hydrophobic pair interactions (λ increased by 20%)
+cif2top structure.cif convert -o output.pqr --scale-hydrophobic lambda:1.2
+
+# Scale hydrophobic ε instead
+cif2top structure.cif convert -o output.pqr --scale-hydrophobic epsilon:0.8
+
 # Custom conditions
 cif2top structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -o output.pqr
 
@@ -95,6 +101,22 @@ independent-site approximation.
 
 4. **Ensemble averages**: The mean charge ⟨Z⟩, ⟨Z²⟩, dipole moment ⟨μ⟩,
    and ⟨μ²⟩ are accumulated over all sweeps as true ensemble averages.
+
+## Hydrophobic pair scaling
+
+The `--scale-hydrophobic` flag generates pairwise nonbonded overrides in the
+topology for all hydrophobic residue pairs (ALA, ILE, LEU, MET, PHE, PRO, TRP,
+TYR, VAL). This is useful for modelling temperature-dependent hydrophobic
+effects without changing the global default interaction.
+
+Parameters are mixed using Lorentz-Berthelot combining rules (arithmetic mean
+for σ and λ, geometric mean for ε), then the chosen quantity is scaled:
+
+- `lambda:<factor>` — scale the Ashbaugh-Hatch hydrophobicity λ
+- `epsilon:<factor>` — scale the Lennard-Jones well depth ε
+
+The resulting `[TypeA, TypeB]:` pair entries appear under `nonbonded:` in the
+topology YAML, overriding the `default:` mixing rule for those specific pairs.
 
 ## pH scan
 
