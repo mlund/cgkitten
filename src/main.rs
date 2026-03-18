@@ -9,7 +9,7 @@ use nu_ansi_term::Color;
 use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
 
-use cif2top::{
+use cgkitten::{
     Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with, coarse_grain_with,
 };
 
@@ -111,7 +111,7 @@ enum Commands {
     },
 }
 
-fn read_beads(input: &Option<PathBuf>, policy: &dyn cif2top::CoarseGrain) -> io::Result<Vec<Bead>> {
+fn read_beads(input: &Option<PathBuf>, policy: &dyn cgkitten::CoarseGrain) -> io::Result<Vec<Bead>> {
     if let Some(path) = input {
         let file = File::open(path)?;
         // Dispatch on file extension; stdin always assumes mmCIF.
@@ -134,7 +134,7 @@ fn read_beads(input: &Option<PathBuf>, policy: &dyn cif2top::CoarseGrain) -> io:
     }
 }
 
-fn cg_policy(p: &CgPolicy) -> &'static dyn cif2top::CoarseGrain {
+fn cg_policy(p: &CgPolicy) -> &'static dyn cgkitten::CoarseGrain {
     match p {
         CgPolicy::Multi => &MultiBead,
         CgPolicy::Single => &SingleBead,
@@ -143,7 +143,7 @@ fn cg_policy(p: &CgPolicy) -> &'static dyn cif2top::CoarseGrain {
 
 /// Format beads as PQR file.
 fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
-    use cif2top::BeadType;
+    use cgkitten::BeadType;
     let mut out = String::new();
     writeln!(
         out,
@@ -211,7 +211,7 @@ struct AtomType {
     charge: f64,
     mass: f64,
     res_name: String,
-    bead_type: cif2top::BeadType,
+    bead_type: cgkitten::BeadType,
 }
 
 /// Assign each bead to a topology type and return per-bead type names.
@@ -221,7 +221,7 @@ struct AtomType {
 /// are merged into a single type; otherwise they get unique numbered
 /// names (e.g., O1, O2, N1).
 fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
-    use cif2top::BeadType;
+    use cgkitten::BeadType;
 
     let mut types: Vec<AtomType> = Vec::new();
     let mut counters: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -304,14 +304,14 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
 /// Format topology as YAML with unique atom types.
 fn format_topology(
     types: &[AtomType],
-    ff: Option<&dyn cif2top::forcefield::ForceField>,
-    pairs: &[cif2top::forcefield::PairInteraction],
+    ff: Option<&dyn cgkitten::forcefield::ForceField>,
+    pairs: &[cgkitten::forcefield::PairInteraction],
     cg: &CgPolicy,
 ) -> String {
     let mut out = format!("# model: {cg}\natoms:\n");
     for t in types {
         let sc_comment =
-            if matches!(cg, CgPolicy::Multi) && t.bead_type == cif2top::BeadType::Sidechain {
+            if matches!(cg, CgPolicy::Multi) && t.bead_type == cgkitten::BeadType::Sidechain {
                 " # titratable sidechain"
             } else {
                 ""
@@ -349,7 +349,7 @@ fn format_topology(
                 );
             }
         }
-        out.push_str(&cif2top::forcefield::format_pair_yaml(pair));
+        out.push_str(&cgkitten::forcefield::format_pair_yaml(pair));
     }
 
     out
@@ -365,6 +365,20 @@ fn ph_steps(ph_start: f64, ph_end: f64, ph_step: f64) -> Vec<f64> {
 
 fn main() -> io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    if io::stderr().is_terminal() {
+        eprintln!(
+            " /\\_/\\\n{}~ {}\n         {} v{}\n",
+            Color::Yellow.bold().paint("(=^·^=)"),
+            Color::Cyan.paint("○-○-○-○-○"),
+            Color::Green.bold().paint("cgkitten"),
+            env!("CARGO_PKG_VERSION"),
+        );
+    } else {
+        eprintln!(" /\\_/\\");
+        eprintln!("(=^·^=)~ ○-○-○-○-○");
+        eprintln!("         cgkitten v{}\n", env!("CARGO_PKG_VERSION"));
+    }
 
     let cli = Cli::parse();
     let common = &cli.common;
@@ -384,7 +398,7 @@ fn main() -> io::Result<()> {
                 .ionic_strength(common.ionic_strength)
                 .mc(common.mc);
 
-            let ff = cif2top::forcefield::from_name(&model);
+            let ff = cgkitten::forcefield::from_name(&model);
             // "none" is an explicit opt-out; unknown names are errors
             if ff.is_none() && model != "none" {
                 return Err(io::Error::new(
@@ -394,6 +408,10 @@ fn main() -> io::Result<()> {
             }
 
             let beads = read_beads(&common.input, policy)?;
+            match &common.input {
+                Some(path) => info!("Input: {}", path.display()),
+                None => info!("Input: stdin"),
+            }
             calc.log_conditions();
             let result = calc.run(&beads);
             let charged = result.apply(&beads);
@@ -403,7 +421,7 @@ fn main() -> io::Result<()> {
                 result.multipole.charge, result.multipole.dipole
             );
 
-            let scaling: cif2top::forcefield::HydrophobicScaling = scale_hydrophobic
+            let scaling: cgkitten::forcefield::HydrophobicScaling = scale_hydrophobic
                 .as_deref()
                 .map(|s| {
                     s.parse()
@@ -412,13 +430,20 @@ fn main() -> io::Result<()> {
                 .transpose()?
                 .unwrap_or_default();
 
+            if common.mc > 0 {
+                info!("Titration: MC ({} steps)", common.mc);
+            } else {
+                info!("Titration: Henderson-Hasselbalch");
+            }
+            info!("Hydrophobic scaling: {scaling}");
+
             // Assign topology type names first so coordinate files use matching names
             let (types, names) = assign_types(&charged);
 
             // Collect (name, params) for all types that have FF parameters.
             // hydrophobic_pairs() filters this down to hydrophobic residues only,
             // so it's safe to pass everything — non-hydrophobic types are ignored.
-            let hp_types: Vec<(String, cif2top::forcefield::BeadParams)> = types
+            let hp_types: Vec<(String, cgkitten::forcefield::BeadParams)> = types
                 .iter()
                 .filter_map(|t| {
                     ff.as_deref()
@@ -426,9 +451,9 @@ fn main() -> io::Result<()> {
                         .map(|p| (t.name.clone(), p))
                 })
                 .collect();
-            let pairs = cif2top::forcefield::hydrophobic_pairs(
+            let pairs = cgkitten::forcefield::hydrophobic_pairs(
                 &hp_types,
-                cif2top::residue::HYDROPHOBIC_RESIDUES,
+                cgkitten::residue::HYDROPHOBIC_RESIDUES,
                 &scaling,
             );
 

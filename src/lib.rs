@@ -7,8 +7,8 @@
 //!
 //! ```no_run
 //! let cif_data = std::fs::read("structure.cif").unwrap();
-//! let beads = cif2top::coarse_grain(cif_data.as_slice());
-//! let result = cif2top::ChargeCalc::new()
+//! let beads = cgkitten::coarse_grain(cif_data.as_slice());
+//! let result = cgkitten::ChargeCalc::new()
 //!     .ph(7.0)
 //!     .mc(10000)
 //!     .run(&beads);

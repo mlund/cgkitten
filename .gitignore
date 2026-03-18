@@ -1,5 +1,9 @@
 /target
 *.cif
+*.pdb
 *.pqr
 *.xyz
 *.xyzq
+*.yaml
+*.json
+*.dat

@@ -116,6 +116,16 @@ impl std::str::FromStr for HydrophobicScaling {
     }
 }
 
+impl std::fmt::Display for HydrophobicScaling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HydrophobicScaling::NoScale => f.write_str("none"),
+            HydrophobicScaling::ScaleLambda(c) => write!(f, "lambda×{c}"),
+            HydrophobicScaling::ScaleEpsilon(c) => write!(f, "epsilon×{c}"),
+        }
+    }
+}
+
 /// A pairwise nonbonded interaction override.
 pub struct PairInteraction {
     /// First bead type name.

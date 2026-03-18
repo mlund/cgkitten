@@ -1,6 +1,12 @@
-# cif2top
+# cgkitten
 
-Convert mmCIF protein structures to a coarse-grained representation.
+```
+ /\_/\
+(=^·^=)~ ○-○-○-○-○
+         cgkitten
+```
+
+Convert mmCIF/PDB protein structures to a coarse-grained representation.
 
 Two coarse-graining policies are available:
 
@@ -20,7 +26,7 @@ with screened Coulomb (Yukawa) electrostatics. Use `--mc 0` for Henderson-Hassel
 ## Install
 
 ```bash
-cargo install --git https://github.com/mlund/cif2top
+cargo install --git https://github.com/mlund/cgkitten
 ```
 
 ## Usage
@@ -30,43 +36,43 @@ placed before the subcommand.
 
 ```bash
 # Convert at pH 7 with MC titration (default: 10000 sweeps)
-cif2top structure.cif convert -o output.pqr
+cgkitten structure.cif convert -o output.pqr
 
 # Single-bead coarse-graining (one bead per residue)
-cif2top structure.cif --cg single convert -o output.pqr --top topology.yaml
+cgkitten structure.cif --cg single convert -o output.pqr --top topology.yaml
 
 # Henderson-Hasselbalch only (no MC)
-cif2top structure.cif --mc 0 convert -o output.pqr
+cgkitten structure.cif --mc 0 convert -o output.pqr
 
 # Custom pH and sweeps
-cif2top structure.cif --mc 50000 convert --ph 4.5 -o output.pqr
+cgkitten structure.cif --mc 50000 convert --ph 4.5 -o output.pqr
 
 # Pipe from stdin
-cat structure.cif | cif2top convert -o output.pqr
+cat structure.cif | cgkitten convert -o output.pqr
 
 # Plain XYZ output (no charges)
-cif2top structure.cif convert -o output.xyz
+cgkitten structure.cif convert -o output.xyz
 
 # Scale hydrophobic pair interactions (λ increased by 20%)
-cif2top structure.cif convert -o output.pqr --scale-hydrophobic lambda:1.2
+cgkitten structure.cif convert -o output.pqr --scale-hydrophobic lambda:1.2
 
 # Scale hydrophobic ε instead
-cif2top structure.cif convert -o output.pqr --scale-hydrophobic epsilon:0.8
+cgkitten structure.cif convert -o output.pqr --scale-hydrophobic epsilon:0.8
 
 # Custom conditions
-cif2top structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -o output.pqr
+cgkitten structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -o output.pqr
 
 # pH scan with terminal plot
-cif2top structure.cif scan
+cgkitten structure.cif scan
 
 # pH scan with single-bead policy
-cif2top structure.cif --cg single scan
+cgkitten structure.cif --cg single scan
 
 # pH scan with HH only
-cif2top structure.cif --mc 0 scan
+cgkitten structure.cif --mc 0 scan
 
 # pH scan with custom range and save to file
-cif2top structure.cif scan --ph-start 2 --ph-end 12 --ph-step 0.25 -o curve.dat
+cgkitten structure.cif scan --ph-start 2 --ph-end 12 --ph-step 0.25 -o curve.dat
 ```
 
 ## Monte Carlo titration
@@ -137,7 +143,7 @@ mu2 is ⟨μ²⟩. MC columns are included when `--mc` > 0.
 ## Library usage
 
 ```rust
-use cif2top::{ChargeCalc, coarse_grain, coarse_grain_with, SingleBead};
+use cgkitten::{ChargeCalc, coarse_grain, coarse_grain_with, SingleBead};
 
 let cif_data = std::fs::read("structure.cif").unwrap();
 
