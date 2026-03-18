@@ -363,8 +363,12 @@ fn format_topology(
                 ""
             };
         let ff_params = ff.and_then(|f| f.params(&t.res_name, t.bead_type));
-        // Use canonical model mass when available; fall back to mass computed from atomic coords.
-        let mass = ff_params.map(|p| p.mass).unwrap_or(t.mass);
+        // Use canonical model mass when available (mass > 0 in the force field).
+        // mass == 0.0 is the sentinel for virtual/terminal/ion beads whose mass comes
+        // from atomic coordinates instead (ions) or is genuinely zero (virtual sites).
+        let mass = ff_params
+            .and_then(|p| (p.mass > 0.0).then_some(p.mass))
+            .unwrap_or(t.mass);
         let ff_fields = ff_params
             .map(|p| {
                 if p.lambda > 0.0 {
