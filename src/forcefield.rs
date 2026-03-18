@@ -34,7 +34,7 @@ pub struct Calvados3;
 
 // (res_name, mass_da, lambda, sigma, epsilon)
 // Masses are average residue masses (Da) from the Calvados 3 model.
-const CALVADOS3_BACKBONE: &[(&str, f64, f64, f64, f64)] = &[
+const CALVADOS3_RESIDUE: &[(&str, f64, f64, f64, f64)] = &[
     ("ALA", 89.09, 0.3377244362031627, 5.04, 0.8368),
     ("ARG", 174.20, 0.7407902764839954, 6.56, 0.8368),
     ("ASN", 132.12, 0.3706962163690402, 5.68, 0.8368),
@@ -57,9 +57,9 @@ const CALVADOS3_BACKBONE: &[(&str, f64, f64, f64, f64)] = &[
     ("VAL", 117.15, 0.2936174211771383, 5.86, 0.8368),
 ];
 
-/// Sidechain/terminal beads all share the same σ, ε, λ in Calvados 3.
-/// λ = 0 because titratable site beads are point charges with no hydrophobic interaction.
-/// mass = 0 because the full residue mass is carried by the backbone bead.
+/// Virtual/terminal beads all share the same σ, ε, λ in Calvados 3.
+/// λ = 0 because virtual titratable sites are point charges with no hydrophobic interaction.
+/// mass = 0 because the full residue mass is carried by the residue bead.
 const CALVADOS3_SITE: BeadParams = BeadParams {
     mass: 0.0,
     sigma: 2.0,
@@ -70,7 +70,7 @@ const CALVADOS3_SITE: BeadParams = BeadParams {
 impl ForceField for Calvados3 {
     fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
-            BeadType::Residue | BeadType::Titratable => CALVADOS3_BACKBONE
+            BeadType::Residue | BeadType::Titratable => CALVADOS3_RESIDUE
                 .iter()
                 .find(|(name, _, _, _, _)| *name == res_name)
                 .map(|(_, mass, lambda, sigma, epsilon)| BeadParams {
