@@ -1,18 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 85" width="300" height="85">
-  <style>
-    .mono { font-family: "Courier New", Courier, monospace; font-size: 18px; }
-  </style>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 90" width="320" height="90">
 
-  <!-- Line 1:  /\_/\  -->
-  <text class="mono" x="16" y="24" fill="#999999"> /\_/\</text>
+  <!-- === Kitten face === -->
+  <!-- Left ear -->
+  <polygon points="28,22 18,2 44,14" fill="#f5c842" stroke="#c89a10" stroke-width="1.2"/>
+  <polygon points="30,20 22,8 40,15" fill="#f0a0a0"/>
+  <!-- Right ear -->
+  <polygon points="72,22 82,2 56,14" fill="#f5c842" stroke="#c89a10" stroke-width="1.2"/>
+  <polygon points="70,20 78,8 60,15" fill="#f0a0a0"/>
 
-  <!-- Line 2: (=^·^=)~ ○-○-○-○-○ -->
-  <text class="mono" x="16" y="48">
-    <tspan fill="#f5c518">(=^</tspan><tspan fill="#e05555">·</tspan><tspan fill="#f5c518">^=)</tspan><tspan fill="#999999">~ </tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan>
-  </text>
+  <!-- Head -->
+  <circle cx="50" cy="46" r="34" fill="#f5c842" stroke="#c89a10" stroke-width="1.5"/>
 
-  <!-- Line 3:          cgkitten -->
-  <text class="mono" x="16" y="72">
-    <tspan fill="#999999">         </tspan><tspan fill="#6dbb6d" font-weight="bold">cgkitten</tspan>
-  </text>
+  <!-- Eyes -->
+  <ellipse cx="38" cy="40" rx="7" ry="8" fill="#1a1a2e"/>
+  <ellipse cx="62" cy="40" rx="7" ry="8" fill="#1a1a2e"/>
+  <!-- Eye shine -->
+  <circle cx="40" cy="37" r="2.5" fill="white"/>
+  <circle cx="64" cy="37" r="2.5" fill="white"/>
+  <!-- Iris -->
+  <ellipse cx="38" cy="41" rx="3" ry="5" fill="#2ecc71"/>
+  <ellipse cx="62" cy="41" rx="3" ry="5" fill="#2ecc71"/>
+  <!-- Pupil -->
+  <ellipse cx="38" cy="41" rx="1.5" ry="4" fill="#111"/>
+  <ellipse cx="62" cy="41" rx="1.5" ry="4" fill="#111"/>
+
+  <!-- Nose -->
+  <polygon points="50,50 46,55 54,55" fill="#e07070"/>
+  <!-- Mouth -->
+  <path d="M46,56 Q50,61 54,56" stroke="#c04040" stroke-width="1.2" fill="none"/>
+
+  <!-- Whiskers left -->
+  <line x1="10" y1="51" x2="40" y2="53" stroke="#888" stroke-width="1" opacity="0.7"/>
+  <line x1="10" y1="57" x2="40" y2="57" stroke="#888" stroke-width="1" opacity="0.7"/>
+  <!-- Whiskers right -->
+  <line x1="90" y1="51" x2="60" y2="53" stroke="#888" stroke-width="1" opacity="0.7"/>
+  <line x1="90" y1="57" x2="60" y2="57" stroke="#888" stroke-width="1" opacity="0.7"/>
+
+  <!-- === Bead chain === -->
+  <!-- Connecting lines -->
+  <line x1="86" y1="46" x2="118" y2="36" stroke="#aaccee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="118" y1="36" x2="154" y2="42" stroke="#aaccee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="154" y1="42" x2="188" y2="30" stroke="#aaccee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="188" y1="30" x2="222" y2="38" stroke="#aaccee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="222" y1="38" x2="254" y2="28" stroke="#aaccee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="254" y1="28" x2="284" y2="38" stroke="#aaccee" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Beads -->
+  <circle cx="118" cy="36" r="13" fill="#7ed6a0" stroke="#4aaa72" stroke-width="1.5"/>
+  <circle cx="154" cy="42" r="11" fill="#5bc8f5" stroke="#3399cc" stroke-width="1.5"/>
+  <circle cx="188" cy="30" r="14" fill="#f5a742" stroke="#cc7a1a" stroke-width="1.5"/>
+  <circle cx="222" cy="38" r="10" fill="#5bc8f5" stroke="#3399cc" stroke-width="1.5"/>
+  <circle cx="254" cy="28" r="13" fill="#e07070" stroke="#bb3333" stroke-width="1.5"/>
+  <circle cx="284" cy="38" r="11" fill="#7ed6a0" stroke="#4aaa72" stroke-width="1.5"/>
+
+  <!-- Charge labels -->
+  <text x="118" y="40" text-anchor="middle" font-size="10" font-family="sans-serif" fill="white" font-weight="bold">+</text>
+  <text x="188" y="35" text-anchor="middle" font-size="10" font-family="sans-serif" fill="white" font-weight="bold">−</text>
+  <text x="254" y="33" text-anchor="middle" font-size="10" font-family="sans-serif" fill="white" font-weight="bold">+</text>
+
 </svg>
