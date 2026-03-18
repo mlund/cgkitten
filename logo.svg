@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 85" width="300" height="85">
+  <style>
+    .mono { font-family: "Courier New", Courier, monospace; font-size: 18px; }
+  </style>
+
+  <!-- Line 1:  /\_/\  -->
+  <text class="mono" x="16" y="24" fill="#999999"> /\_/\</text>
+
+  <!-- Line 2: (=^·^=)~ ○-○-○-○-○ -->
+  <text class="mono" x="16" y="48">
+    <tspan fill="#f5c518">(=^</tspan><tspan fill="#e05555">·</tspan><tspan fill="#f5c518">^=)</tspan><tspan fill="#999999">~ </tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan><tspan fill="#999999">-</tspan><tspan fill="#5bc8f5">○</tspan>
+  </text>
+
+  <!-- Line 3:          cgkitten -->
+  <text class="mono" x="16" y="72">
+    <tspan fill="#999999">         </tspan><tspan fill="#6dbb6d" font-weight="bold">cgkitten</tspan>
+  </text>
+</svg>

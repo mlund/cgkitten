@@ -1,10 +1,6 @@
 # cgkitten
 
-```
- /\_/\
-(=^·^=)~ ○-○-○-○-○
-         cgkitten
-```
+<img src="logo.svg" alt="cgkitten logo" />
 
 Convert mmCIF/PDB protein structures to a coarse-grained representation.
 
