@@ -32,7 +32,8 @@ cargo install --git https://github.com/mlund/cgkitten
 ## Usage
 
 Shared flags (`input`, `--temperature`, `--ionic-strength`, `--mc`, `--cg`, `--chain`) are
-placed before the subcommand.
+placed before the subcommand. Convert-specific flags (`--ph`, `--top`, `--model`,
+`--scale-hydrophobic`, `--merge-tol`) follow the `convert` subcommand.
 
 ```bash
 # Convert at pH 7 with MC titration (default: 10000 sweeps)
@@ -62,6 +63,9 @@ cgkitten structure.cif convert --scale-hydrophobic lambda:1.2
 
 # Scale hydrophobic ε instead
 cgkitten structure.cif convert --scale-hydrophobic epsilon:0.8
+
+# Custom charge-merging tolerance (default 0.02)
+cgkitten structure.cif convert --merge-tol 0.05
 
 # Custom conditions
 cgkitten structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5
@@ -111,7 +115,8 @@ independent-site approximation.
    P = min(1, exp(−ΔU/kT))
 
    where ΔU/kT = Δq · φ\_i ± ln(10) · (pH − pKa), with φ\_i being the
-   electrostatic potential at site i from all other charges.
+   electrostatic potential at site i from all other titratable sites plus
+   a constant background from fixed-charge beads (metal ions).
 
 4. **Ensemble averages**: The mean charge ⟨Z⟩, ⟨Z²⟩, dipole moment ⟨μ⟩,
    and ⟨μ²⟩ are accumulated over all sweeps as true ensemble averages.
@@ -131,6 +136,14 @@ for σ and λ, geometric mean for ε), then the chosen quantity is scaled:
 
 The resulting `[TypeA, TypeB]:` pair entries appear under `nonbonded:` in the
 topology YAML, overriding the `default:` mixing rule for those specific pairs.
+
+## Topology output
+
+The topology YAML (`topology.yaml` by default, override with `--top`) contains
+atom types with charge, mass, σ, ε, and λ. Titratable site types with similar
+charges (within `--merge-tol`, default 2%) are merged into a single type using
+their mean charge. The file header records the exact command used to generate it
+for reproducibility.
 
 ## pH scan
 
