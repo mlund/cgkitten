@@ -85,7 +85,7 @@ impl ForceField for Calvados3 {
 }
 
 /// Hydrophobic scaling policy for nonbonded pair overrides.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum HydrophobicScaling {
     /// No scaling applied.
     #[default]
@@ -142,6 +142,9 @@ pub fn hydrophobic_pairs(
     hydrophobic: &[&str],
     scaling: &HydrophobicScaling,
 ) -> Vec<PairInteraction> {
+    if *scaling == HydrophobicScaling::NoScale {
+        return Vec::new();
+    }
     let hp: Vec<_> = types
         .iter()
         .filter(|(name, _)| hydrophobic.contains(&name.as_str()))
@@ -206,7 +209,7 @@ mod tests {
             ("ALA".into(), BeadParams { sigma: 5.04, epsilon: 0.8368, lambda: 0.3377 }),
             ("VAL".into(), BeadParams { sigma: 5.86, epsilon: 0.8368, lambda: 0.2936 }),
         ];
-        let pairs = hydrophobic_pairs(&types, &["ALA", "VAL"], &HydrophobicScaling::NoScale);
+        let pairs = hydrophobic_pairs(&types, &["ALA", "VAL"], &HydrophobicScaling::ScaleLambda(1.0));
         assert_eq!(pairs.len(), 3); // ALA-ALA, ALA-VAL, VAL-VAL
 
         // ALA-VAL cross pair
@@ -246,7 +249,7 @@ mod tests {
             ("ALA".into(), BeadParams { sigma: 5.04, epsilon: 0.8368, lambda: 0.3377 }),
             ("GLU".into(), BeadParams { sigma: 5.92, epsilon: 0.8368, lambda: 0.0002 }),
         ];
-        let pairs = hydrophobic_pairs(&types, &["ALA"], &HydrophobicScaling::NoScale);
+        let pairs = hydrophobic_pairs(&types, &["ALA"], &HydrophobicScaling::ScaleLambda(1.0));
         assert_eq!(pairs.len(), 1); // only ALA-ALA
         assert_eq!(pairs[0].name_a, "ALA");
         assert_eq!(pairs[0].name_b, "ALA");

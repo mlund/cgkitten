@@ -225,11 +225,13 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
                 bead_type_names.push(b.res_name.clone());
             }
             BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr | BeadType::Titratable => {
-                // Merge sites with same element, mass, and charge (within tolerance)
-                // to reduce topology size without losing physical accuracy
+                // Merge sites with same element/residue and charge (within tolerance).
+                // Titratable (single-bead whole-residue) ignores mass like Backbone does,
+                // since atom-count variations across instances are not physically meaningful.
+                // Sidechain/Ntr/Ctr also require mass to match, as they are sub-residue beads.
                 let existing = types.iter().find(|t| {
                     t.res_name == b.res_name
-                        && t.mass == b.mass
+                        && (b.bead_type == BeadType::Titratable || t.mass == b.mass)
                         && (t.charge - b.charge).abs() < CHARGE_MERGE_TOL
                         && t.bead_type.is_titratable()
                 });

@@ -541,14 +541,13 @@ fn center_and_mass(atoms: &[&AtomRecord]) -> Option<((f64, f64, f64), f64)> {
     if atoms.is_empty() {
         return None;
     }
-    let (center, mass) = atoms
+    let (weighted, mass) = atoms
         .iter()
         .fold(((0.0, 0.0, 0.0), 0.0), |((sx, sy, sz), m), a| {
             let am = residue::atomic_mass(&a.element);
-            ((sx + a.x, sy + a.y, sz + a.z), m + am)
+            ((sx + a.x * am, sy + a.y * am, sz + a.z * am), m + am)
         });
-    let n = atoms.len() as f64;
-    Some(((center.0 / n, center.1 / n, center.2 / n), mass))
+    Some(((weighted.0 / mass, weighted.1 / mass, weighted.2 / mass), mass))
 }
 
 /// Create a titratable bead at the group's charge center (charge = 0.0).
