@@ -75,9 +75,9 @@ impl std::fmt::Display for CgPolicy {
 enum Commands {
     /// Convert mmCIF to coarse-grained representation.
     Convert {
-        /// Output file (.pqr or .xyz).
+        /// Output file (.pqr or .xyz). Defaults to input basename with .pqr extension.
         #[arg(short, long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
 
         /// pH for charge calculation.
         #[arg(long, default_value = "7.0")]
@@ -113,6 +113,16 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+}
+
+/// Derive a default output path from the input path by replacing its extension with `ext`.
+/// Falls back to `output.<ext>` when reading from stdin.
+fn default_output(input: &Option<PathBuf>, ext: &str) -> PathBuf {
+    input
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .map(|stem| PathBuf::from(stem).with_extension(ext))
+        .unwrap_or_else(|| PathBuf::from(format!("output.{ext}")))
 }
 
 fn read_beads(
@@ -481,15 +491,30 @@ fn main() -> io::Result<()> {
                 &scaling,
             );
 
-            let is_xyz = output.extension().is_some_and(|ext| ext == "xyz");
-            let text = if is_xyz {
-                format_xyz(&charged, &names, &calc)
+            if let Some(path) = output {
+                // Explicit output: write only the requested format.
+                let text = if path.extension().is_some_and(|e| e == "xyz") {
+                    format_xyz(&charged, &names, &calc)
+                } else {
+                    format_pqr(&charged, &names, &calc)
+                };
+                let mut file = File::create(&path)?;
+                file.write_all(text.as_bytes())?;
+                info!("Output saved to {}", path.display());
             } else {
-                format_pqr(&charged, &names, &calc)
-            };
-
-            let mut file = File::create(&output)?;
-            file.write_all(text.as_bytes())?;
+                // No explicit output: save both PQR and XYZ derived from input basename.
+                for ext in ["pqr", "xyz"] {
+                    let path = default_output(&common.input, ext);
+                    let text = if ext == "xyz" {
+                        format_xyz(&charged, &names, &calc)
+                    } else {
+                        format_pqr(&charged, &names, &calc)
+                    };
+                    let mut file = File::create(&path)?;
+                    file.write_all(text.as_bytes())?;
+                    info!("Output saved to {}", path.display());
+                }
+            }
 
             {
                 let mut types = types;

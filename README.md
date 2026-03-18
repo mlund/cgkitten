@@ -36,35 +36,39 @@ placed before the subcommand.
 
 ```bash
 # Convert at pH 7 with MC titration (default: 10000 sweeps)
+# Saves both structure.pqr and structure.xyz by default
+cgkitten structure.cif convert
+
+# Explicit output file (single format)
 cgkitten structure.cif convert -o output.pqr
 
 # Single-bead coarse-graining (one bead per residue)
-cgkitten structure.cif --cg single convert -o output.pqr --top topology.yaml
+cgkitten structure.cif --cg single convert --top topology.yaml
 
 # Henderson-Hasselbalch only (no MC)
-cgkitten structure.cif --mc 0 convert -o output.pqr
+cgkitten structure.cif --mc 0 convert
 
 # Custom pH and sweeps
-cgkitten structure.cif --mc 50000 convert --ph 4.5 -o output.pqr
+cgkitten structure.cif --mc 50000 convert --ph 4.5
 
-# Pipe from stdin
-cat structure.cif | cgkitten convert -o output.pqr
+# Pipe from stdin (saves output.pqr and output.xyz)
+cat structure.cif | cgkitten convert
 
-# Plain XYZ output (no charges)
+# Single format output
 cgkitten structure.cif convert -o output.xyz
 
 # Scale hydrophobic pair interactions (λ increased by 20%)
-cgkitten structure.cif convert -o output.pqr --scale-hydrophobic lambda:1.2
+cgkitten structure.cif convert --scale-hydrophobic lambda:1.2
 
 # Scale hydrophobic ε instead
-cgkitten structure.cif convert -o output.pqr --scale-hydrophobic epsilon:0.8
+cgkitten structure.cif convert --scale-hydrophobic epsilon:0.8
 
 # Custom conditions
-cgkitten structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -o output.pqr
+cgkitten structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5
 
 # Select specific chains (default: all chains)
-cgkitten structure.cif --chain A convert -o output.pqr
-cgkitten structure.cif --chain A --chain B convert -o output.pqr
+cgkitten structure.cif --chain A convert
+cgkitten structure.cif --chain A --chain B convert
 
 # pH scan with terminal plot
 cgkitten structure.cif scan
