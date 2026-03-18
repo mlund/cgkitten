@@ -173,6 +173,7 @@ fn cg_policy(p: &CgPolicy) -> &'static dyn cgkitten::CoarseGrain {
 
 /// Format beads as PQR file.
 fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
+    debug_assert_eq!(beads.len(), names.len(), "beads and names must be 1:1");
     use cgkitten::BeadType;
     let mut out = String::new();
     writeln!(
@@ -213,6 +214,7 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
 
 /// Format beads as plain XYZ file (no charges).
 fn format_xyz(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
+    debug_assert_eq!(beads.len(), names.len(), "beads and names must be 1:1");
     let mut out = String::new();
     writeln!(out, "{}", beads.len()).expect("writing to String is infallible");
     writeln!(
@@ -391,15 +393,17 @@ fn format_topology(
 
 /// Generate pH steps over [ph_start, ph_end].
 fn ph_steps(ph_start: f64, ph_end: f64, ph_step: f64) -> Vec<f64> {
+    assert!(
+        ph_step > 0.0 && ph_start <= ph_end,
+        "ph_step must be positive and ph_start ≤ ph_end"
+    );
     let n = ((ph_end - ph_start) / ph_step).round() as usize + 1;
     (0..n)
         .map(|i| (i as f64).mul_add(ph_step, ph_start))
         .collect()
 }
 
-fn main() -> io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
+fn print_logo() {
     if io::stderr().is_terminal() {
         eprintln!(
             " /\\_/\\\n{}~ {}\n         {} v{}\n",
@@ -413,6 +417,241 @@ fn main() -> io::Result<()> {
         eprintln!("(=^·^=)~ ○-○-○-○-○");
         eprintln!("         cgkitten v{}\n", env!("CARGO_PKG_VERSION"));
     }
+}
+
+fn run_convert(
+    common: &CommonArgs,
+    policy: &dyn cgkitten::CoarseGrain,
+    output: Option<PathBuf>,
+    ph: f64,
+    top: PathBuf,
+    model: String,
+    scale_hydrophobic: Option<String>,
+) -> io::Result<()> {
+    let calc = ChargeCalc::new()
+        .ph(ph)
+        .temperature(common.temperature)
+        .ionic_strength(common.ionic_strength)
+        .mc(common.mc);
+
+    let ff = cgkitten::forcefield::from_name(&model);
+    // "none" is an explicit opt-out; unknown names are errors
+    if ff.is_none() && model != "none" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown force field model: {model}"),
+        ));
+    }
+
+    let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
+    match &common.input {
+        Some(path) => info!("Input: {}", path.display()),
+        None => info!("Input: stdin"),
+    }
+    calc.log_conditions();
+    let result = calc.run(&beads);
+    let charged = result.apply(&beads);
+
+    info!(
+        "⟨Z⟩ = {:.2}, ⟨μ⟩ = {:.1} e·Å",
+        result.multipole.charge, result.multipole.dipole
+    );
+
+    let scaling: cgkitten::forcefield::HydrophobicScaling = scale_hydrophobic
+        .as_deref()
+        .map(|s| {
+            s.parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    if common.mc > 0 {
+        info!("Titration: MC ({} steps)", common.mc);
+    } else {
+        info!("Titration: Henderson-Hasselbalch");
+    }
+    info!("Hydrophobic scaling: {scaling}");
+
+    // Assign topology type names first so coordinate files use matching names
+    let (types, names) = assign_types(&charged);
+
+    // Collect (name, params) for all types that have FF parameters.
+    // hydrophobic_pairs() filters this down to hydrophobic residues only,
+    // so it's safe to pass everything — non-hydrophobic types are ignored.
+    let hp_types: Vec<(String, cgkitten::forcefield::BeadParams)> = types
+        .iter()
+        .filter_map(|t| {
+            ff.as_deref()
+                .and_then(|f| f.params(&t.res_name, t.bead_type))
+                .map(|p| (t.name.clone(), p))
+        })
+        .collect();
+    let pairs = cgkitten::forcefield::hydrophobic_pairs(
+        &hp_types,
+        cgkitten::residue::HYDROPHOBIC_RESIDUES,
+        &scaling,
+    );
+
+    if let Some(path) = output {
+        // Explicit output: write only the requested format.
+        let text = if path.extension().is_some_and(|e| e == "xyz") {
+            format_xyz(&charged, &names, &calc)
+        } else {
+            format_pqr(&charged, &names, &calc)
+        };
+        let mut file = File::create(&path)?;
+        file.write_all(text.as_bytes())?;
+        info!("Output saved to {}", path.display());
+    } else {
+        // No explicit output: save both PQR and XYZ derived from input basename.
+        for ext in ["pqr", "xyz"] {
+            let path = default_output(&common.input, ext);
+            let text = if ext == "xyz" {
+                format_xyz(&charged, &names, &calc)
+            } else {
+                format_pqr(&charged, &names, &calc)
+            };
+            let mut file = File::create(&path)?;
+            file.write_all(text.as_bytes())?;
+            info!("Output saved to {}", path.display());
+        }
+    }
+
+    let mut types = types;
+    types.sort_by(|a, b| a.name.cmp(&b.name));
+    let yaml = format_topology(&types, ff.as_deref(), &pairs, &common.cg);
+    let mut file = File::create(&top)?;
+    file.write_all(yaml.as_bytes())?;
+    info!("Topology saved to {}", top.display());
+
+    Ok(())
+}
+
+fn run_scan(
+    common: &CommonArgs,
+    policy: &dyn cgkitten::CoarseGrain,
+    ph_start: f64,
+    ph_end: f64,
+    ph_step: f64,
+    output: Option<PathBuf>,
+) -> io::Result<()> {
+    let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
+    let base_calc = ChargeCalc::new()
+        .temperature(common.temperature)
+        .ionic_strength(common.ionic_strength)
+        .mc(common.mc);
+    base_calc.log_conditions();
+    let ph_values = ph_steps(ph_start, ph_end, ph_step);
+
+    // HH scan
+    let hh_data: Vec<(f64, ChargeResult)> = ph_values
+        .iter()
+        .map(|&ph| {
+            let result = base_calc.clone().ph(ph).run(&beads);
+            (ph, result)
+        })
+        .collect();
+
+    let hh_f32: Vec<(f32, f32)> = hh_data
+        .iter()
+        .map(|(ph, r)| (*ph as f32, r.multipole.charge as f32))
+        .collect();
+
+    // MC scan (parallelized)
+    let mc_data = if common.mc > 0 {
+        use rayon::prelude::*;
+        let pb = indicatif::ProgressBar::new(ph_values.len() as u64);
+        pb.tick(); // force initial draw before rayon dispatches work
+        let data = ph_values
+            .par_iter()
+            .map(|&ph| {
+                let result = base_calc.clone().ph(ph).run(&beads);
+                pb.inc(1);
+                (ph, result)
+            })
+            .collect::<Vec<_>>();
+        pb.finish_and_clear();
+        Some(data)
+    } else {
+        None
+    };
+
+    if let Some(path) = &output {
+        let mut file = File::create(path)?;
+        if mc_data.is_some() {
+            writeln!(
+                file,
+                "# pH Z(HH) Z2(HH) mu(HH) mu2(HH) Z(MC) Z2(MC) mu(MC) mu2(MC)"
+            )?;
+        } else {
+            writeln!(file, "# pH Z(HH) Z2(HH) mu(HH) mu2(HH)")?;
+        }
+        for (i, (ph, hh)) in hh_data.iter().enumerate() {
+            let m = &hh.multipole;
+            if let Some(mc) = &mc_data {
+                let mc = &mc[i].1.multipole;
+                writeln!(
+                    file,
+                    "{:.2} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}",
+                    ph,
+                    m.charge,
+                    m.charge_sq,
+                    m.dipole,
+                    m.dipole_sq,
+                    mc.charge,
+                    mc.charge_sq,
+                    mc.dipole,
+                    mc.dipole_sq,
+                )?;
+            } else {
+                writeln!(
+                    file,
+                    "{:.2} {:.4} {:.4} {:.4} {:.4}",
+                    ph, m.charge, m.charge_sq, m.dipole, m.dipole_sq,
+                )?;
+            }
+        }
+        info!("Titration curve saved to {}", path.display());
+    }
+
+    const YELLOW: RGB8 = RGB8::new(255, 255, 0);
+    const RED: RGB8 = RGB8::new(255, 0, 0);
+
+    if let Some(mc_data) = &mc_data {
+        let mc_f32: Vec<(f32, f32)> = mc_data
+            .iter()
+            .map(|(ph, r)| (*ph as f32, r.multipole.charge as f32))
+            .collect();
+
+        info!(
+            "⟨Z⟩ vs pH: {} Henderson-Hasselbalch, {} Monte Carlo ({} sweeps)",
+            Color::Yellow.bold().paint("━━"),
+            Color::Red.bold().paint("━━"),
+            common.mc,
+        );
+
+        Chart::new(120, 40, ph_start as f32, ph_end as f32)
+            .linecolorplot(&Shape::Lines(&hh_f32), YELLOW)
+            .linecolorplot(&Shape::Lines(&mc_f32), RED)
+            .nice();
+    } else {
+        info!(
+            "⟨Z⟩ vs pH: {} Henderson-Hasselbalch",
+            Color::Yellow.bold().paint("━━"),
+        );
+
+        Chart::new(120, 40, ph_start as f32, ph_end as f32)
+            .linecolorplot(&Shape::Lines(&hh_f32), YELLOW)
+            .nice();
+    }
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    print_logo();
 
     let cli = Cli::parse();
     let common = &cli.common;
@@ -425,232 +664,12 @@ fn main() -> io::Result<()> {
             top,
             model,
             scale_hydrophobic,
-        } => {
-            let calc = ChargeCalc::new()
-                .ph(ph)
-                .temperature(common.temperature)
-                .ionic_strength(common.ionic_strength)
-                .mc(common.mc);
-
-            let ff = cgkitten::forcefield::from_name(&model);
-            // "none" is an explicit opt-out; unknown names are errors
-            if ff.is_none() && model != "none" {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("unknown force field model: {model}"),
-                ));
-            }
-
-            let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
-            match &common.input {
-                Some(path) => info!("Input: {}", path.display()),
-                None => info!("Input: stdin"),
-            }
-            calc.log_conditions();
-            let result = calc.run(&beads);
-            let charged = result.apply(&beads);
-
-            info!(
-                "⟨Z⟩ = {:.2}, ⟨μ⟩ = {:.1} e·Å",
-                result.multipole.charge, result.multipole.dipole
-            );
-
-            let scaling: cgkitten::forcefield::HydrophobicScaling = scale_hydrophobic
-                .as_deref()
-                .map(|s| {
-                    s.parse()
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
-                })
-                .transpose()?
-                .unwrap_or_default();
-
-            if common.mc > 0 {
-                info!("Titration: MC ({} steps)", common.mc);
-            } else {
-                info!("Titration: Henderson-Hasselbalch");
-            }
-            info!("Hydrophobic scaling: {scaling}");
-
-            // Assign topology type names first so coordinate files use matching names
-            let (types, names) = assign_types(&charged);
-
-            // Collect (name, params) for all types that have FF parameters.
-            // hydrophobic_pairs() filters this down to hydrophobic residues only,
-            // so it's safe to pass everything — non-hydrophobic types are ignored.
-            let hp_types: Vec<(String, cgkitten::forcefield::BeadParams)> = types
-                .iter()
-                .filter_map(|t| {
-                    ff.as_deref()
-                        .and_then(|f| f.params(&t.res_name, t.bead_type))
-                        .map(|p| (t.name.clone(), p))
-                })
-                .collect();
-            let pairs = cgkitten::forcefield::hydrophobic_pairs(
-                &hp_types,
-                cgkitten::residue::HYDROPHOBIC_RESIDUES,
-                &scaling,
-            );
-
-            if let Some(path) = output {
-                // Explicit output: write only the requested format.
-                let text = if path.extension().is_some_and(|e| e == "xyz") {
-                    format_xyz(&charged, &names, &calc)
-                } else {
-                    format_pqr(&charged, &names, &calc)
-                };
-                let mut file = File::create(&path)?;
-                file.write_all(text.as_bytes())?;
-                info!("Output saved to {}", path.display());
-            } else {
-                // No explicit output: save both PQR and XYZ derived from input basename.
-                for ext in ["pqr", "xyz"] {
-                    let path = default_output(&common.input, ext);
-                    let text = if ext == "xyz" {
-                        format_xyz(&charged, &names, &calc)
-                    } else {
-                        format_pqr(&charged, &names, &calc)
-                    };
-                    let mut file = File::create(&path)?;
-                    file.write_all(text.as_bytes())?;
-                    info!("Output saved to {}", path.display());
-                }
-            }
-
-            {
-                let mut types = types;
-                types.sort_by(|a, b| a.name.cmp(&b.name));
-                let yaml = format_topology(&types, ff.as_deref(), &pairs, &common.cg);
-                let mut file = File::create(&top)?;
-                file.write_all(yaml.as_bytes())?;
-                info!("Topology saved to {}", top.display());
-            }
-        }
+        } => run_convert(common, policy, output, ph, top, model, scale_hydrophobic),
         Commands::Scan {
             ph_start,
             ph_end,
             ph_step,
             output,
-        } => {
-            let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
-            ChargeCalc::new()
-                .temperature(common.temperature)
-                .ionic_strength(common.ionic_strength)
-                .mc(common.mc)
-                .log_conditions();
-            let ph_values = ph_steps(ph_start, ph_end, ph_step);
-
-            // HH scan
-            let hh_data: Vec<(f64, ChargeResult)> = ph_values
-                .iter()
-                .map(|&ph| {
-                    let result = ChargeCalc::new()
-                        .ph(ph)
-                        .temperature(common.temperature)
-                        .ionic_strength(common.ionic_strength)
-                        .run(&beads);
-                    (ph, result)
-                })
-                .collect();
-
-            let hh_f32: Vec<(f32, f32)> = hh_data
-                .iter()
-                .map(|(ph, r)| (*ph as f32, r.multipole.charge as f32))
-                .collect();
-
-            // MC scan (parallelized)
-            let mc_data = if common.mc > 0 {
-                use rayon::prelude::*;
-                let pb = indicatif::ProgressBar::new(ph_values.len() as u64);
-                pb.tick(); // force initial draw before rayon dispatches work
-                let data = ph_values
-                    .par_iter()
-                    .map(|&ph| {
-                        let result = ChargeCalc::new()
-                            .ph(ph)
-                            .temperature(common.temperature)
-                            .ionic_strength(common.ionic_strength)
-                            .mc(common.mc)
-                            .run(&beads);
-                        pb.inc(1);
-                        (ph, result)
-                    })
-                    .collect::<Vec<_>>();
-                pb.finish_and_clear();
-                Some(data)
-            } else {
-                None
-            };
-
-            if let Some(path) = &output {
-                let mut file = File::create(path)?;
-                if mc_data.is_some() {
-                    writeln!(
-                        file,
-                        "# pH Z(HH) Z2(HH) mu(HH) mu2(HH) Z(MC) Z2(MC) mu(MC) mu2(MC)"
-                    )?;
-                } else {
-                    writeln!(file, "# pH Z(HH) Z2(HH) mu(HH) mu2(HH)")?;
-                }
-                for (i, (ph, hh)) in hh_data.iter().enumerate() {
-                    let m = &hh.multipole;
-                    if let Some(mc) = &mc_data {
-                        let mc = &mc[i].1.multipole;
-                        writeln!(
-                            file,
-                            "{:.2} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}",
-                            ph,
-                            m.charge,
-                            m.charge_sq,
-                            m.dipole,
-                            m.dipole_sq,
-                            mc.charge,
-                            mc.charge_sq,
-                            mc.dipole,
-                            mc.dipole_sq,
-                        )?;
-                    } else {
-                        writeln!(
-                            file,
-                            "{:.2} {:.4} {:.4} {:.4} {:.4}",
-                            ph, m.charge, m.charge_sq, m.dipole, m.dipole_sq,
-                        )?;
-                    }
-                }
-                info!("Titration curve saved to {}", path.display());
-            }
-
-            const YELLOW: RGB8 = RGB8::new(255, 255, 0);
-            const RED: RGB8 = RGB8::new(255, 0, 0);
-
-            if let Some(mc_data) = &mc_data {
-                let mc_f32: Vec<(f32, f32)> = mc_data
-                    .iter()
-                    .map(|(ph, r)| (*ph as f32, r.multipole.charge as f32))
-                    .collect();
-
-                info!(
-                    "⟨Z⟩ vs pH: {} Henderson-Hasselbalch, {} Monte Carlo ({} sweeps)",
-                    Color::Yellow.bold().paint("━━"),
-                    Color::Red.bold().paint("━━"),
-                    common.mc,
-                );
-
-                Chart::new(120, 40, ph_start as f32, ph_end as f32)
-                    .linecolorplot(&Shape::Lines(&hh_f32), YELLOW)
-                    .linecolorplot(&Shape::Lines(&mc_f32), RED)
-                    .nice();
-            } else {
-                info!(
-                    "⟨Z⟩ vs pH: {} Henderson-Hasselbalch",
-                    Color::Yellow.bold().paint("━━"),
-                );
-
-                Chart::new(120, 40, ph_start as f32, ph_end as f32)
-                    .linecolorplot(&Shape::Lines(&hh_f32), YELLOW)
-                    .nice();
-            }
-        }
+        } => run_scan(common, policy, ph_start, ph_end, ph_step, output),
     }
-
-    Ok(())
 }
