@@ -71,30 +71,37 @@ impl std::fmt::Display for CgPolicy {
     }
 }
 
+#[derive(Args)]
+struct ConvertArgs {
+    /// Output file (.pqr or .xyz). Defaults to input basename with .pqr extension.
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// pH for charge calculation.
+    #[arg(long, default_value = "7.0")]
+    ph: f64,
+
+    /// Save topology as YAML file.
+    #[arg(long, default_value = "topology.yaml")]
+    top: PathBuf,
+
+    /// Force field model for topology parameters.
+    #[arg(long, default_value = "calvados3")]
+    model: String,
+
+    /// Scale hydrophobic pair interactions: lambda:<factor> or epsilon:<factor>.
+    #[arg(long)]
+    scale_hydrophobic: Option<String>,
+
+    /// Charge tolerance for merging titratable site types into a shared topology entry.
+    #[arg(long, default_value = "0.02")]
+    merge_tol: f64,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Convert mmCIF to coarse-grained representation.
-    Convert {
-        /// Output file (.pqr or .xyz). Defaults to input basename with .pqr extension.
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// pH for charge calculation.
-        #[arg(long, default_value = "7.0")]
-        ph: f64,
-
-        /// Save topology as YAML file.
-        #[arg(long, default_value = "topology.yaml")]
-        top: PathBuf,
-
-        /// Force field model for topology parameters.
-        #[arg(long, default_value = "calvados3")]
-        model: String,
-
-        /// Scale hydrophobic pair interactions: lambda:<factor> or epsilon:<factor>.
-        #[arg(long)]
-        scale_hydrophobic: Option<String>,
-    },
+    Convert(ConvertArgs),
     /// Scan average charge, dipole vs pH and plot titration curve.
     Scan {
         /// Start pH.
@@ -213,16 +220,11 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
 }
 
 /// Format beads as plain XYZ file (no charges).
-fn format_xyz(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
+fn format_xyz(beads: &[Bead], names: &[String], cmdline: &str) -> String {
     debug_assert_eq!(beads.len(), names.len(), "beads and names must be 1:1");
     let mut out = String::new();
     writeln!(out, "{}", beads.len()).expect("writing to String is infallible");
-    writeln!(
-        out,
-        "cif2top pH={:.2} T={:.2} I={:.3}",
-        calc.ph, calc.temperature, calc.ionic_strength,
-    )
-    .expect("writing to String is infallible");
+    writeln!(out, "{cmdline}").expect("writing to String is infallible");
     for (i, b) in beads.iter().enumerate() {
         writeln!(
             out,
@@ -233,9 +235,6 @@ fn format_xyz(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     }
     out
 }
-
-/// Charge tolerance for merging titratable site types (1%).
-const CHARGE_MERGE_TOL: f64 = 0.01;
 
 /// A registered atom type for topology output.
 struct AtomType {
@@ -252,13 +251,16 @@ struct AtomType {
 /// Titratable sites with the same element, mass, and charge (within 1%)
 /// are merged into a single type; otherwise they get unique numbered
 /// names (e.g., O1, O2, N1).
-fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
+fn assign_types(beads: &[Bead], merge_tol: f64) -> (Vec<AtomType>, Vec<String>) {
     use cgkitten::BeadType;
 
     let mut types: Vec<AtomType> = Vec::new();
     let mut counters: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     // Per-bead type name, matching the topology entry
     let mut bead_type_names: Vec<String> = Vec::with_capacity(beads.len());
+    // Accumulate (charge_sum, count) per titratable type so we can average at the end.
+    // Indexed in parallel with `types`; non-titratable entries are unused (0, 0).
+    let mut charge_acc: Vec<(f64, usize)> = Vec::new();
 
     for b in beads {
         match b.bead_type {
@@ -272,6 +274,7 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
                         res_name: b.res_name.clone(),
                         bead_type: b.bead_type,
                     });
+                    charge_acc.push((0.0, 0));
                 }
                 bead_type_names.push(b.res_name.clone());
             }
@@ -280,19 +283,23 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
                 // Titratable (single-bead whole-residue) ignores mass like Backbone does,
                 // since atom-count variations across instances are not physically meaningful.
                 // Sidechain/Ntr/Ctr also require mass to match, as they are sub-residue beads.
-                let existing = types.iter().find(|t| {
+                let existing_idx = types.iter().position(|t| {
                     t.res_name == b.res_name
                         && (b.bead_type == BeadType::Titratable || t.mass == b.mass)
-                        && (t.charge - b.charge).abs() < CHARGE_MERGE_TOL
+                        && (t.charge - b.charge).abs() < merge_tol
                         && t.bead_type.is_titratable()
                 });
-                if let Some(t) = existing {
-                    bead_type_names.push(t.name.clone());
+                if let Some(idx) = existing_idx {
+                    // Accumulate charge for mean calculation
+                    charge_acc[idx].0 += b.charge;
+                    charge_acc[idx].1 += 1;
+                    bead_type_names.push(types[idx].name.clone());
                 } else {
                     let counter = counters.entry(b.res_name.clone()).or_insert(0);
                     *counter += 1;
                     let name = format!("{}{}", b.res_name, counter);
                     bead_type_names.push(name.clone());
+                    charge_acc.push((b.charge, 1));
                     types.push(AtomType {
                         name,
                         charge: b.charge,
@@ -302,6 +309,13 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
                     });
                 }
             }
+        }
+    }
+
+    // Replace first-seen charges with mean charge across all merged beads.
+    for (t, (sum, count)) in types.iter_mut().zip(charge_acc.iter()) {
+        if *count > 0 {
+            t.charge = sum / *count as f64;
         }
     }
 
@@ -326,7 +340,7 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
     if n_after < n_before {
         info!(
             "Merged {n_before} titratable sites into {n_after} unique types (tolerance {:.0}%)",
-            CHARGE_MERGE_TOL * 100.0
+            merge_tol * 100.0
         );
     }
 
@@ -419,15 +433,26 @@ fn print_logo() {
     }
 }
 
+fn log_chains(beads: &[Bead]) {
+    let mut chains: Vec<&str> = beads.iter().map(|b| b.chain_id.as_str()).collect();
+    chains.sort_unstable();
+    chains.dedup();
+    info!("Chains: {} ({})", chains.join(", "), chains.len());
+}
+
 fn run_convert(
     common: &CommonArgs,
     policy: &dyn cgkitten::CoarseGrain,
-    output: Option<PathBuf>,
-    ph: f64,
-    top: PathBuf,
-    model: String,
-    scale_hydrophobic: Option<String>,
+    args: ConvertArgs,
 ) -> io::Result<()> {
+    let ConvertArgs {
+        output,
+        ph,
+        top,
+        model,
+        scale_hydrophobic,
+        merge_tol,
+    } = args;
     let calc = ChargeCalc::new()
         .ph(ph)
         .temperature(common.temperature)
@@ -443,11 +468,12 @@ fn run_convert(
         ));
     }
 
-    let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
     match &common.input {
         Some(path) => info!("Input: {}", path.display()),
         None => info!("Input: stdin"),
     }
+    let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
+    log_chains(&beads);
     calc.log_conditions();
     let result = calc.run(&beads);
     let charged = result.apply(&beads);
@@ -473,8 +499,14 @@ fn run_convert(
     }
     info!("Hydrophobic scaling: {scaling}");
 
+    let cmdline = format!(
+        "cgkitten v{} | {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::args().collect::<Vec<_>>().join(" ")
+    );
+
     // Assign topology type names first so coordinate files use matching names
-    let (types, names) = assign_types(&charged);
+    let (types, names) = assign_types(&charged, merge_tol);
 
     // Collect (name, params) for all types that have FF parameters.
     // hydrophobic_pairs() filters this down to hydrophobic residues only,
@@ -496,7 +528,7 @@ fn run_convert(
     if let Some(path) = output {
         // Explicit output: write only the requested format.
         let text = if path.extension().is_some_and(|e| e == "xyz") {
-            format_xyz(&charged, &names, &calc)
+            format_xyz(&charged, &names, &cmdline)
         } else {
             format_pqr(&charged, &names, &calc)
         };
@@ -508,7 +540,7 @@ fn run_convert(
         for ext in ["pqr", "xyz"] {
             let path = default_output(&common.input, ext);
             let text = if ext == "xyz" {
-                format_xyz(&charged, &names, &calc)
+                format_xyz(&charged, &names, &cmdline)
             } else {
                 format_pqr(&charged, &names, &calc)
             };
@@ -520,7 +552,8 @@ fn run_convert(
 
     let mut types = types;
     types.sort_by(|a, b| a.name.cmp(&b.name));
-    let yaml = format_topology(&types, ff.as_deref(), &pairs, &common.cg);
+    let yaml =
+        format!("# {cmdline}\n") + &format_topology(&types, ff.as_deref(), &pairs, &common.cg);
     let mut file = File::create(&top)?;
     file.write_all(yaml.as_bytes())?;
     info!("Topology saved to {}", top.display());
@@ -536,7 +569,12 @@ fn run_scan(
     ph_step: f64,
     output: Option<PathBuf>,
 ) -> io::Result<()> {
+    match &common.input {
+        Some(path) => info!("Input: {}", path.display()),
+        None => info!("Input: stdin"),
+    }
     let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
+    log_chains(&beads);
     let base_calc = ChargeCalc::new()
         .temperature(common.temperature)
         .ionic_strength(common.ionic_strength)
@@ -658,13 +696,7 @@ fn main() -> io::Result<()> {
     let policy = cg_policy(&common.cg);
 
     match cli.command {
-        Commands::Convert {
-            output,
-            ph,
-            top,
-            model,
-            scale_hydrophobic,
-        } => run_convert(common, policy, output, ph, top, model, scale_hydrophobic),
+        Commands::Convert(args) => run_convert(common, policy, args),
         Commands::Scan {
             ph_start,
             ph_end,
