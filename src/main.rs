@@ -478,11 +478,11 @@ fn run_scan(
     base_calc.log_conditions();
     let ph_values = ph_steps(ph_start, ph_end, ph_step);
 
-    // HH scan
+    // HH scan (always Henderson-Hasselbalch, ignoring mc setting)
     let hh_data: Vec<(f64, ChargeResult)> = ph_values
         .iter()
         .map(|&ph| {
-            let result = base_calc.clone().ph(ph).run(&beads);
+            let result = base_calc.clone().ph(ph).mc(0).run(&beads);
             (ph, result)
         })
         .collect();
