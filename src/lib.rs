@@ -563,13 +563,13 @@ fn make_titratable_bead(
         .filter(|a| group.center_atoms.contains(&a.name.as_str()))
         .copied()
         .collect();
-    let ((x, y, z), mass) = center_and_mass(&center_atoms)?;
+    let ((x, y, z), _mass) = center_and_mass(&center_atoms)?;
     Some(Bead {
         x,
         y,
         z,
         charge: 0.0,
-        mass,
+        mass: 0.0, // mass already accounted for in the main residue bead at COM
         // Named by element (O, N, S) to distinguish from backbone beads (which use residue name)
         res_name: group.element.to_string(),
         chain_id: key.chain_id.clone(),
@@ -776,6 +776,18 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
 
         let ctr = beads.iter().find(|b| b.bead_type == BeadType::Ctr).unwrap();
         assert_eq!(ctr.res_seq, 2);
+    }
+
+    #[test]
+    fn sidechain_bead_has_zero_mass() {
+        // The charged sidechain bead must have mass 0.0 — its atoms are already
+        // counted in the main residue bead placed at the COM.
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let sc_beads: Vec<_> = beads.iter().filter(|b| b.bead_type == BeadType::Sidechain).collect();
+        assert!(!sc_beads.is_empty(), "expected at least one sidechain bead");
+        for b in &sc_beads {
+            assert_eq!(b.mass, 0.0, "sidechain bead {}:{} has non-zero mass {}", b.chain_id, b.res_seq, b.mass);
+        }
     }
 
     #[test]
