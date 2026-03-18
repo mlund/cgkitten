@@ -50,6 +50,10 @@ struct CommonArgs {
     /// Coarse-graining policy: "multi" (backbone + sidechain beads) or "single" (one bead per residue).
     #[arg(long, default_value = "multi")]
     cg: CgPolicy,
+
+    /// Include only these chain IDs (default: all chains). Repeat to include multiple: --chain A --chain B
+    #[arg(long)]
+    chain: Vec<String>,
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -111,7 +115,10 @@ enum Commands {
     },
 }
 
-fn read_beads(input: &Option<PathBuf>, policy: &dyn cgkitten::CoarseGrain) -> io::Result<Vec<Bead>> {
+fn read_beads(
+    input: &Option<PathBuf>,
+    policy: &dyn cgkitten::CoarseGrain,
+) -> io::Result<Vec<Bead>> {
     if let Some(path) = input {
         let file = File::open(path)?;
         // Dispatch on file extension; stdin always assumes mmCIF.
@@ -132,6 +139,19 @@ fn read_beads(input: &Option<PathBuf>, policy: &dyn cgkitten::CoarseGrain) -> io
         let stdin = io::stdin();
         Ok(coarse_grain_with(stdin.lock(), policy))
     }
+}
+
+/// Filter beads to the requested chains; if `chains` is empty all beads are kept.
+fn filter_chains(beads: Vec<Bead>, chains: &[String]) -> Vec<Bead> {
+    if chains.is_empty() {
+        return beads;
+    }
+    let kept: Vec<_> = beads
+        .into_iter()
+        .filter(|b| chains.iter().any(|c| c == &b.chain_id))
+        .collect();
+    info!("Chain filter {:?}: {} beads retained", chains, kept.len());
+    kept
 }
 
 fn cg_policy(p: &CgPolicy) -> &'static dyn cgkitten::CoarseGrain {
@@ -407,7 +427,7 @@ fn main() -> io::Result<()> {
                 ));
             }
 
-            let beads = read_beads(&common.input, policy)?;
+            let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
             match &common.input {
                 Some(path) => info!("Input: {}", path.display()),
                 None => info!("Input: stdin"),
@@ -482,7 +502,7 @@ fn main() -> io::Result<()> {
             ph_step,
             output,
         } => {
-            let beads = read_beads(&common.input, policy)?;
+            let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
             ChargeCalc::new()
                 .temperature(common.temperature)
                 .ionic_strength(common.ionic_strength)

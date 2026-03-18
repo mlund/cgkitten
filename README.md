@@ -10,9 +10,9 @@ Convert mmCIF/PDB protein structures to a coarse-grained representation.
 
 Two coarse-graining policies are available:
 
-- **multi** (default): Each amino acid becomes a backbone bead at its geometric center.
+- **multi** (default): Each amino acid becomes one bead at its centre of mass.
   Titratable residues (ASP, GLU, HIS, CYS, TYR, LYS, ARG) get an additional bead
-  at the charge center.
+  at the charge centre.
 - **single**: Each amino acid becomes exactly one bead. Titratable residues get
   unique numbered type names (ASP1, ASP2, ...) to carry distinct charges.
 
@@ -31,7 +31,7 @@ cargo install --git https://github.com/mlund/cgkitten
 
 ## Usage
 
-Shared flags (`input`, `--temperature`, `--ionic-strength`, `--mc`, `--cg`) are
+Shared flags (`input`, `--temperature`, `--ionic-strength`, `--mc`, `--cg`, `--chain`) are
 placed before the subcommand.
 
 ```bash
@@ -61,6 +61,10 @@ cgkitten structure.cif convert -o output.pqr --scale-hydrophobic epsilon:0.8
 
 # Custom conditions
 cgkitten structure.cif --temperature 310 --ionic-strength 0.15 convert --ph 4.5 -o output.pqr
+
+# Select specific chains (default: all chains)
+cgkitten structure.cif --chain A convert -o output.pqr
+cgkitten structure.cif --chain A --chain B convert -o output.pqr
 
 # pH scan with terminal plot
 cgkitten structure.cif scan
