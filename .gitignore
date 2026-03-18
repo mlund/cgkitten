@@ -2,6 +2,7 @@
 *.cif
 *.pdb
 *.pqr
+*.xy
 *.xyz
 *.xyzq
 *.yaml
