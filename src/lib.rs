@@ -22,6 +22,7 @@ pub(crate) mod charge;
 pub mod forcefield;
 pub(crate) mod mc;
 pub(crate) mod mmcif;
+pub(crate) mod pdb;
 /// Amino acid residue definitions and constants.
 pub mod residue;
 
@@ -365,14 +366,29 @@ pub fn coarse_grain<R: BufRead>(reader: R) -> Vec<Bead> {
 
 /// Convert mmCIF data to coarse-grained beads using the given policy.
 pub fn coarse_grain_with<R: BufRead>(reader: R, policy: &dyn CoarseGrain) -> Vec<Bead> {
-    let parse_options = ParseOptions::default();
-    let parsed = mmcif::parse_mmcif(reader, &parse_options);
+    let parsed = mmcif::parse_mmcif(reader, &ParseOptions::default());
     debug!(
         "Parsed {} atom records, {} disulfide bonds from _struct_conn",
         parsed.atoms.len(),
         parsed.disulfide_bonds.len(),
     );
+    beads_from_parsed(&parsed, policy)
+}
 
+/// Convert PDB data to coarse-grained beads using the given policy.
+pub fn coarse_grain_pdb_with<R: BufRead>(reader: R, policy: &dyn CoarseGrain) -> Vec<Bead> {
+    let parsed = pdb::parse_pdb(reader, &ParseOptions::default());
+    debug!(
+        "Parsed {} atom records, {} SSBOND disulfide bonds from PDB",
+        parsed.atoms.len(),
+        parsed.disulfide_bonds.len(),
+    );
+    beads_from_parsed(&parsed, policy)
+}
+
+// Both coarse_grain_with and coarse_grain_pdb_with produce a ParsedMmcif, so the
+// downstream bead-building logic is shared here rather than duplicated per format.
+fn beads_from_parsed(parsed: &mmcif::ParsedMmcif, policy: &dyn CoarseGrain) -> Vec<Bead> {
     records_to_beads(&parsed.atoms, &parsed.disulfide_bonds, policy)
 }
 
@@ -380,7 +396,7 @@ pub fn coarse_grain_with<R: BufRead>(reader: R, policy: &dyn CoarseGrain) -> Vec
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Unique residue key for grouping atoms.
+/// Unique residue key for grouping atoms, used in the [`CoarseGrain`] trait.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ResidueKey {
     /// Chain identifier.
@@ -551,7 +567,10 @@ fn center_and_mass(atoms: &[&AtomRecord]) -> Option<((f64, f64, f64), f64)> {
             let am = residue::atomic_mass(&a.element);
             ((sx + a.x * am, sy + a.y * am, sz + a.z * am), m + am)
         });
-    Some(((weighted.0 / mass, weighted.1 / mass, weighted.2 / mass), mass))
+    Some((
+        (weighted.0 / mass, weighted.1 / mass, weighted.2 / mass),
+        mass,
+    ))
 }
 
 /// Create a titratable bead at the group's charge center (charge = 0.0).
@@ -786,10 +805,17 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
         // The charged sidechain bead must have mass 0.0 — its atoms are already
         // counted in the main residue bead placed at the COM.
         let beads = coarse_grain(TEST_CIF.as_bytes());
-        let sc_beads: Vec<_> = beads.iter().filter(|b| b.bead_type == BeadType::Sidechain).collect();
+        let sc_beads: Vec<_> = beads
+            .iter()
+            .filter(|b| b.bead_type == BeadType::Sidechain)
+            .collect();
         assert!(!sc_beads.is_empty(), "expected at least one sidechain bead");
         for b in &sc_beads {
-            assert_eq!(b.mass, 0.0, "sidechain bead {}:{} has non-zero mass {}", b.chain_id, b.res_seq, b.mass);
+            assert_eq!(
+                b.mass, 0.0,
+                "sidechain bead {}:{} has non-zero mass {}",
+                b.chain_id, b.res_seq, b.mass
+            );
         }
     }
 

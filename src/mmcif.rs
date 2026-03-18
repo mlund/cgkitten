@@ -149,7 +149,12 @@ impl<R: BufRead> Tokenizer<R> {
             self.buffer.clear();
             self.position = 0;
             match self.reader.read_line(&mut self.buffer) {
-                Ok(0) | Err(_) => {
+                Ok(0) => {
+                    self.eof = true;
+                    return false;
+                }
+                Err(e) => {
+                    log::warn!("I/O error reading mmCIF input: {e}");
                     self.eof = true;
                     return false;
                 }
@@ -229,7 +234,7 @@ fn is_stop_token(token: &str) -> bool {
     token.starts_with('_') || token.starts_with("data_") || token == "loop_"
 }
 
-fn normalize_atom_name(name: &str) -> String {
+pub(crate) fn normalize_atom_name(name: &str) -> String {
     if name.is_empty() {
         return String::new();
     }
@@ -322,7 +327,7 @@ fn parse_atom_row(row: &[String], field_map: &HashMap<AtomField, usize>) -> Opti
     })
 }
 
-fn is_hydrogen(record: &AtomRecord) -> bool {
+pub(crate) fn is_hydrogen(record: &AtomRecord) -> bool {
     record.name.starts_with('H') || record.element == "H" || record.element == "D"
 }
 

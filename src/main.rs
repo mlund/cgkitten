@@ -9,7 +9,9 @@ use nu_ansi_term::Color;
 use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
 
-use cif2top::{Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_with};
+use cif2top::{
+    Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with, coarse_grain_with,
+};
 
 /// Convert mmCIF protein structures to coarse-grained representation.
 ///
@@ -54,6 +56,15 @@ struct CommonArgs {
 enum CgPolicy {
     Multi,
     Single,
+}
+
+impl std::fmt::Display for CgPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CgPolicy::Multi => f.write_str("multi"),
+            CgPolicy::Single => f.write_str("single"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -103,7 +114,15 @@ enum Commands {
 fn read_beads(input: &Option<PathBuf>, policy: &dyn cif2top::CoarseGrain) -> io::Result<Vec<Bead>> {
     if let Some(path) = input {
         let file = File::open(path)?;
-        Ok(coarse_grain_with(BufReader::new(file), policy))
+        // Dispatch on file extension; stdin always assumes mmCIF.
+        let is_pdb = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdb"));
+        if is_pdb {
+            Ok(coarse_grain_pdb_with(BufReader::new(file), policy))
+        } else {
+            Ok(coarse_grain_with(BufReader::new(file), policy))
+        }
     } else if io::stdin().is_terminal() {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -131,7 +150,7 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
         "REMARK cif2top pH={:.2} T={:.2} I={:.3}",
         calc.ph, calc.temperature, calc.ionic_strength,
     )
-    .unwrap();
+    .expect("writing to String is infallible");
     for (i, b) in beads.iter().enumerate() {
         let atom_name = match b.bead_type {
             BeadType::Backbone | BeadType::Titratable => "CA",
@@ -156,29 +175,29 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
             b.charge,
             radius,
         )
-        .unwrap();
+        .expect("writing to String is infallible");
     }
-    writeln!(out, "END").unwrap();
+    writeln!(out, "END").expect("writing to String is infallible");
     out
 }
 
 /// Format beads as plain XYZ file (no charges).
 fn format_xyz(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     let mut out = String::new();
-    writeln!(out, "{}", beads.len()).unwrap();
+    writeln!(out, "{}", beads.len()).expect("writing to String is infallible");
     writeln!(
         out,
         "cif2top pH={:.2} T={:.2} I={:.3}",
         calc.ph, calc.temperature, calc.ionic_strength,
     )
-    .unwrap();
+    .expect("writing to String is infallible");
     for (i, b) in beads.iter().enumerate() {
         writeln!(
             out,
             "{:<5} {:>10.4} {:>10.4} {:>10.4}",
             &names[i], b.x, b.y, b.z
         )
-        .unwrap();
+        .expect("writing to String is infallible");
     }
     out
 }
@@ -289,32 +308,29 @@ fn format_topology(
     pairs: &[cif2top::forcefield::PairInteraction],
     cg: &CgPolicy,
 ) -> String {
-    let model_label = match cg {
-        CgPolicy::Multi => "multi",
-        CgPolicy::Single => "single",
-    };
-    let mut out = format!("# model: {model_label}\natoms:\n");
+    let mut out = format!("# model: {cg}\natoms:\n");
     for t in types {
-        let sc_comment = if matches!(cg, CgPolicy::Multi) && t.bead_type == cif2top::BeadType::Sidechain {
-            " # titratable sidechain"
-        } else {
-            ""
-        };
-        if let Some(params) = ff.and_then(|f| f.params(&t.res_name, t.bead_type)) {
-            writeln!(
-                out,
-                "  - {{charge: {:.4}, mass: {:.2}, name: {}, σ: {}, ε: {}, hydrophobicity: !Lambda {}}}{}",
-                t.charge, t.mass, t.name, params.sigma, params.epsilon, params.lambda, sc_comment,
-            )
-            .unwrap();
-        } else {
-            writeln!(
-                out,
-                "  - {{charge: {:.4}, mass: {:.2}, name: {}}}{}",
-                t.charge, t.mass, t.name, sc_comment,
-            )
-            .unwrap();
-        }
+        let sc_comment =
+            if matches!(cg, CgPolicy::Multi) && t.bead_type == cif2top::BeadType::Sidechain {
+                " # titratable sidechain"
+            } else {
+                ""
+            };
+        let ff_fields = ff
+            .and_then(|f| f.params(&t.res_name, t.bead_type))
+            .map(|p| {
+                format!(
+                    ", σ: {}, ε: {}, hydrophobicity: !Lambda {}",
+                    p.sigma, p.epsilon, p.lambda
+                )
+            })
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "  - {{charge: {:.4}, mass: {:.2}, name: {}{}}}{}",
+            t.charge, t.mass, t.name, ff_fields, sc_comment,
+        )
+        .expect("writing to String is infallible");
     }
 
     if let Some(f) = ff {
@@ -328,7 +344,9 @@ fn format_topology(
     for pair in pairs {
         for name in [pair.name_a.as_str(), pair.name_b.as_str()] {
             if !known.contains(name) {
-                log::warn!("Pair references unknown atom type '{name}' — Faunus will silently ignore this entry");
+                log::warn!(
+                    "Pair references unknown atom type '{name}' — Faunus will silently ignore this entry"
+                );
             }
         }
         out.push_str(&cif2top::forcefield::format_pair_yaml(pair));

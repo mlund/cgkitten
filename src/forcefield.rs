@@ -112,9 +112,7 @@ impl std::str::FromStr for HydrophobicScaling {
                 .map(Self::ScaleEpsilon)
                 .map_err(|e| format!("bad epsilon value: {e}"));
         }
-        Err(format!(
-            "expected 'lambda:<f>' or 'epsilon:<f>'; got '{s}'"
-        ))
+        Err(format!("expected 'lambda:<f>' or 'epsilon:<f>'; got '{s}'"))
     }
 }
 
@@ -154,10 +152,8 @@ pub fn hydrophobic_pairs(
     // Self-pairs (i == j) are included because Faunus pair entries
     // override the default for those types entirely.
     let mut pairs = Vec::new();
-    for i in 0..hp.len() {
-        for j in i..hp.len() {
-            let (na, pa) = &hp[i];
-            let (nb, pb) = &hp[j];
+    for (i, (na, pa)) in hp.iter().enumerate() {
+        for (nb, pb) in &hp[i..] {
             // Lorentz-Berthelot combining rules:
             // σ_mix = arithmetic mean, ε_mix = geometric mean, λ_mix = arithmetic mean
             let sigma = (pa.sigma + pb.sigma) / 2.0;
@@ -165,9 +161,9 @@ pub fn hydrophobic_pairs(
             let mut lambda = (pa.lambda + pb.lambda) / 2.0;
 
             match scaling {
-                HydrophobicScaling::NoScale => {}
                 HydrophobicScaling::ScaleLambda(c) => lambda *= c,
                 HydrophobicScaling::ScaleEpsilon(c) => epsilon *= c,
+                HydrophobicScaling::NoScale => unreachable!("early return above"),
             }
 
             pairs.push(PairInteraction {
@@ -206,10 +202,28 @@ mod tests {
     #[test]
     fn lorentz_berthelot_mixing() {
         let types = vec![
-            ("ALA".into(), BeadParams { sigma: 5.04, epsilon: 0.8368, lambda: 0.3377 }),
-            ("VAL".into(), BeadParams { sigma: 5.86, epsilon: 0.8368, lambda: 0.2936 }),
+            (
+                "ALA".into(),
+                BeadParams {
+                    sigma: 5.04,
+                    epsilon: 0.8368,
+                    lambda: 0.3377,
+                },
+            ),
+            (
+                "VAL".into(),
+                BeadParams {
+                    sigma: 5.86,
+                    epsilon: 0.8368,
+                    lambda: 0.2936,
+                },
+            ),
         ];
-        let pairs = hydrophobic_pairs(&types, &["ALA", "VAL"], &HydrophobicScaling::ScaleLambda(1.0));
+        let pairs = hydrophobic_pairs(
+            &types,
+            &["ALA", "VAL"],
+            &HydrophobicScaling::ScaleLambda(1.0),
+        );
         assert_eq!(pairs.len(), 3); // ALA-ALA, ALA-VAL, VAL-VAL
 
         // ALA-VAL cross pair
@@ -223,9 +237,14 @@ mod tests {
 
     #[test]
     fn scale_lambda() {
-        let types = vec![
-            ("PHE".into(), BeadParams { sigma: 6.36, epsilon: 0.8368, lambda: 0.8906 }),
-        ];
+        let types = vec![(
+            "PHE".into(),
+            BeadParams {
+                sigma: 6.36,
+                epsilon: 0.8368,
+                lambda: 0.8906,
+            },
+        )];
         let pairs = hydrophobic_pairs(&types, &["PHE"], &HydrophobicScaling::ScaleLambda(1.2));
         assert_eq!(pairs.len(), 1);
         assert!((pairs[0].lambda - 0.8906 * 1.2).abs() < 1e-10);
@@ -234,9 +253,14 @@ mod tests {
 
     #[test]
     fn scale_epsilon() {
-        let types = vec![
-            ("TRP".into(), BeadParams { sigma: 6.78, epsilon: 0.8368, lambda: 1.0335 }),
-        ];
+        let types = vec![(
+            "TRP".into(),
+            BeadParams {
+                sigma: 6.78,
+                epsilon: 0.8368,
+                lambda: 1.0335,
+            },
+        )];
         let pairs = hydrophobic_pairs(&types, &["TRP"], &HydrophobicScaling::ScaleEpsilon(0.8));
         assert_eq!(pairs.len(), 1);
         assert!((pairs[0].epsilon - 0.8368 * 0.8).abs() < 1e-10);
@@ -246,8 +270,22 @@ mod tests {
     #[test]
     fn filters_non_hydrophobic() {
         let types = vec![
-            ("ALA".into(), BeadParams { sigma: 5.04, epsilon: 0.8368, lambda: 0.3377 }),
-            ("GLU".into(), BeadParams { sigma: 5.92, epsilon: 0.8368, lambda: 0.0002 }),
+            (
+                "ALA".into(),
+                BeadParams {
+                    sigma: 5.04,
+                    epsilon: 0.8368,
+                    lambda: 0.3377,
+                },
+            ),
+            (
+                "GLU".into(),
+                BeadParams {
+                    sigma: 5.92,
+                    epsilon: 0.8368,
+                    lambda: 0.0002,
+                },
+            ),
         ];
         let pairs = hydrophobic_pairs(&types, &["ALA"], &HydrophobicScaling::ScaleLambda(1.0));
         assert_eq!(pairs.len(), 1); // only ALA-ALA
