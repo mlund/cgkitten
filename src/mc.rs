@@ -86,6 +86,8 @@ pub(crate) struct TitrationResult {
 ///
 /// Only titratable sites are stored. Precomputes the pairwise Yukawa kernel
 /// between titratable sites, then performs MC moves toggling protonation states.
+/// Metal ions contribute a constant background potential included in φ
+/// but never updated during sweeps.
 pub(crate) struct TitrationMC {
     /// Charges of titratable sites only (length = n_sites).
     charges: Vec<f64>,
@@ -96,6 +98,10 @@ pub(crate) struct TitrationMC {
     kernel: Vec<f64>,
     /// Cached electrostatic potential at each site (kT/e), updated incrementally.
     phi: Vec<f64>,
+    /// Precomputed background potential from fixed-charge beads, stored so
+    /// recompute_phi (test helper) can correctly restore φ after parameter changes.
+    #[cfg(test)]
+    phi_fixed: Vec<f64>,
     lambda_b: f64,
     /// Running net charge (updated incrementally on accepted moves).
     z: f64,
@@ -151,8 +157,40 @@ impl TitrationMC {
         let ns = sites.len();
         debug!("{ns} titratable sites");
 
-        // Non-titratable beads have fixed charge and don't affect ΔU of protonation moves,
-        // so the kernel only needs titratable-titratable pairs: O(n_sites²) instead of O(n²)
+        // A nearby Zn²⁺ (or other metal ion) raises the local electrostatic potential and
+        // shifts pKa values of titratable residues — a real physical effect that must be
+        // included. Because metal ion charges never change during the simulation, their
+        // Yukawa contribution to φ_i is a constant offset: compute it once here and add it
+        // to φ. NTR/CTR already titrate and appear in titratable_indices; backbone beads
+        // carry zero charge; so in practice only metal ions contribute.
+        let titratable_indices: std::collections::HashSet<usize> =
+            sites.iter().map(|s| s.bead_index).collect();
+        let phi_fixed: Vec<f64> = positions
+            .iter()
+            .map(|&pos_i| {
+                lambda_b
+                    * beads
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, b)| !titratable_indices.contains(j) && b.charge != 0.0)
+                        .map(|(_, b)| {
+                            let dx = pos_i[0] - b.x;
+                            let dy = pos_i[1] - b.y;
+                            let dz = pos_i[2] - b.z;
+                            let r = dz.mul_add(dz, dx.mul_add(dx, dy * dy)).sqrt();
+                            if r > 0.0 {
+                                b.charge * (-r * inv_debye).exp() / r
+                            } else {
+                                0.0
+                            }
+                        })
+                        .sum::<f64>()
+            })
+            .collect();
+
+        // ΔU for a protonation move only involves charge changes at titratable sites, so the
+        // kernel only needs titratable-titratable pairs: O(n_sites²) instead of O(n_beads²).
+        // Fixed-charge beads cancel out of ΔU and are handled by phi_fixed above.
         let mut kernel = vec![0.0; ns * ns];
         for i in 0..ns {
             for j in (i + 1)..ns {
@@ -168,16 +206,19 @@ impl TitrationMC {
             }
         }
 
-        // Compute initial cached potentials (diagonal is zero, no branch needed)
+        // Compute initial cached potentials from titratable-titratable interactions
+        // (diagonal is zero, no branch needed), then add the fixed-charge background
+        // so φ_i correctly reflects the full electrostatic environment from the start.
         let phi = (0..ns)
             .map(|i| {
                 let row = &kernel[i * ns..(i + 1) * ns];
-                lambda_b
+                let phi_tit = lambda_b
                     * row
                         .iter()
                         .zip(charges.iter())
                         .map(|(&k, &q)| q * k)
-                        .sum::<f64>()
+                        .sum::<f64>();
+                phi_tit + phi_fixed[i]
             })
             .collect();
 
@@ -197,6 +238,8 @@ impl TitrationMC {
             positions,
             sites,
             kernel,
+            #[cfg(test)]
+            phi_fixed,
             phi,
             lambda_b,
             z,
@@ -225,7 +268,8 @@ impl TitrationMC {
                     .iter()
                     .zip(self.charges.iter())
                     .map(|(&k, &q)| q * k)
-                    .sum::<f64>();
+                    .sum::<f64>()
+                + self.phi_fixed[i];
         }
     }
 

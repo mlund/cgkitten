@@ -339,10 +339,14 @@ fn format_topology(
         let ff_fields = ff
             .and_then(|f| f.params(&t.res_name, t.bead_type))
             .map(|p| {
-                format!(
-                    ", σ: {}, ε: {}, hydrophobicity: !Lambda {}",
-                    p.sigma, p.epsilon, p.lambda
-                )
+                if p.lambda > 0.0 {
+                    format!(
+                        ", σ: {}, ε: {}, hydrophobicity: !Lambda {}",
+                        p.sigma, p.epsilon, p.lambda
+                    )
+                } else {
+                    format!(", σ: {}, ε: {}", p.sigma, p.epsilon)
+                }
             })
             .unwrap_or_default();
         writeln!(
