@@ -8,6 +8,8 @@ use crate::BeadType;
 /// Per-bead force field parameters.
 #[derive(Clone, Copy)]
 pub struct BeadParams {
+    /// Residue mass (Da). 0.0 for site beads whose mass is carried by the backbone bead.
+    pub mass: f64,
     /// Lennard-Jones diameter σ (Å).
     pub sigma: f64,
     /// Lennard-Jones well depth ε (kJ/mol).
@@ -30,33 +32,36 @@ pub trait ForceField {
 /// Parameters from <https://doi.org/10.1093/database/baz024>.
 pub struct Calvados3;
 
-// (res_name, lambda, sigma, epsilon)
-const CALVADOS3_BACKBONE: &[(&str, f64, f64, f64)] = &[
-    ("ALA", 0.3377244362031627, 5.04, 0.8368),
-    ("ARG", 0.7407902764839954, 6.56, 0.8368),
-    ("ASN", 0.3706962163690402, 5.68, 0.8368),
-    ("ASP", 0.092587557536158, 5.58, 0.8368),
-    ("CYS", 0.5922529084601322, 5.48, 0.8368),
-    ("GLN", 0.3143449791669133, 6.02, 0.8368),
-    ("GLU", 0.000249590539426, 5.92, 0.8368),
-    ("GLY", 0.7538308115197386, 4.50, 0.8368),
-    ("HIS", 0.4087176216525476, 6.08, 0.8368),
-    ("ILE", 0.5130398874425708, 6.18, 0.8368),
-    ("LEU", 0.5548615312993875, 6.18, 0.8368),
-    ("LYS", 0.1380602542039267, 6.36, 0.8368),
-    ("MET", 0.5170874160398543, 6.18, 0.8368),
-    ("PHE", 0.8906449355499866, 6.36, 0.8368),
-    ("PRO", 0.3469777523519372, 5.56, 0.8368),
-    ("SER", 0.4473142572693176, 5.18, 0.8368),
-    ("THR", 0.2672387936544146, 5.62, 0.8368),
-    ("TRP", 1.033450123574512, 6.78, 0.8368),
-    ("TYR", 0.950628687301107, 6.46, 0.8368),
-    ("VAL", 0.2936174211771383, 5.86, 0.8368),
+// (res_name, mass_da, lambda, sigma, epsilon)
+// Masses are average residue masses (Da) from the Calvados 3 model.
+const CALVADOS3_BACKBONE: &[(&str, f64, f64, f64, f64)] = &[
+    ("ALA", 89.09, 0.3377244362031627, 5.04, 0.8368),
+    ("ARG", 174.20, 0.7407902764839954, 6.56, 0.8368),
+    ("ASN", 132.12, 0.3706962163690402, 5.68, 0.8368),
+    ("ASP", 133.10, 0.092587557536158, 5.58, 0.8368),
+    ("CYS", 121.16, 0.5922529084601322, 5.48, 0.8368),
+    ("GLN", 146.15, 0.3143449791669133, 6.02, 0.8368),
+    ("GLU", 147.13, 0.000249590539426, 5.92, 0.8368),
+    ("GLY", 75.07, 0.7538308115197386, 4.50, 0.8368),
+    ("HIS", 155.16, 0.4087176216525476, 6.08, 0.8368),
+    ("ILE", 131.17, 0.5130398874425708, 6.18, 0.8368),
+    ("LEU", 131.17, 0.5548615312993875, 6.18, 0.8368),
+    ("LYS", 146.19, 0.1380602542039267, 6.36, 0.8368),
+    ("MET", 149.21, 0.5170874160398543, 6.18, 0.8368),
+    ("PHE", 165.19, 0.8906449355499866, 6.36, 0.8368),
+    ("PRO", 115.13, 0.3469777523519372, 5.56, 0.8368),
+    ("SER", 105.09, 0.4473142572693176, 5.18, 0.8368),
+    ("THR", 119.12, 0.2672387936544146, 5.62, 0.8368),
+    ("TRP", 204.23, 1.033450123574512, 6.78, 0.8368),
+    ("TYR", 181.19, 0.950628687301107, 6.46, 0.8368),
+    ("VAL", 117.15, 0.2936174211771383, 5.86, 0.8368),
 ];
 
 /// Sidechain/terminal beads all share the same σ, ε, λ in Calvados 3.
 /// λ = 0 because titratable site beads are point charges with no hydrophobic interaction.
+/// mass = 0 because the full residue mass is carried by the backbone bead.
 const CALVADOS3_SITE: BeadParams = BeadParams {
+    mass: 0.0,
     sigma: 2.0,
     epsilon: 0.8368,
     lambda: 0.0,
@@ -65,17 +70,18 @@ const CALVADOS3_SITE: BeadParams = BeadParams {
 impl ForceField for Calvados3 {
     fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
-            BeadType::Backbone | BeadType::Titratable => CALVADOS3_BACKBONE
+            BeadType::Residue | BeadType::Titratable => CALVADOS3_BACKBONE
                 .iter()
-                .find(|(name, _, _, _)| *name == res_name)
-                .map(|(_, lambda, sigma, epsilon)| BeadParams {
+                .find(|(name, _, _, _, _)| *name == res_name)
+                .map(|(_, mass, lambda, sigma, epsilon)| BeadParams {
+                    mass: *mass,
                     sigma: *sigma,
                     epsilon: *epsilon,
                     lambda: *lambda,
                 }),
             // Ions get a minimal LJ entry so downstream tools (e.g. duello) have σ/ε defined
             BeadType::Ion => Some(CALVADOS3_SITE),
-            BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr => Some(CALVADOS3_SITE),
+            BeadType::Virtual | BeadType::Ntr | BeadType::Ctr => Some(CALVADOS3_SITE),
         }
     }
 
@@ -215,6 +221,7 @@ mod tests {
             (
                 "ALA".into(),
                 BeadParams {
+                    mass: 0.0,
                     sigma: 5.04,
                     epsilon: 0.8368,
                     lambda: 0.3377,
@@ -223,6 +230,7 @@ mod tests {
             (
                 "VAL".into(),
                 BeadParams {
+                    mass: 0.0,
                     sigma: 5.86,
                     epsilon: 0.8368,
                     lambda: 0.2936,
@@ -250,6 +258,7 @@ mod tests {
         let types = vec![(
             "PHE".into(),
             BeadParams {
+                mass: 0.0,
                 sigma: 6.36,
                 epsilon: 0.8368,
                 lambda: 0.8906,
@@ -266,6 +275,7 @@ mod tests {
         let types = vec![(
             "TRP".into(),
             BeadParams {
+                mass: 0.0,
                 sigma: 6.78,
                 epsilon: 0.8368,
                 lambda: 1.0335,
@@ -283,6 +293,7 @@ mod tests {
             (
                 "ALA".into(),
                 BeadParams {
+                    mass: 0.0,
                     sigma: 5.04,
                     epsilon: 0.8368,
                     lambda: 0.3377,
@@ -291,6 +302,7 @@ mod tests {
             (
                 "GLU".into(),
                 BeadParams {
+                    mass: 0.0,
                     sigma: 5.92,
                     epsilon: 0.8368,
                     lambda: 0.0002,

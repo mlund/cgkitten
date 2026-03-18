@@ -191,8 +191,8 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     .expect("writing to String is infallible");
     for (i, b) in beads.iter().enumerate() {
         let atom_name = match b.bead_type {
-            BeadType::Backbone | BeadType::Titratable => "CA",
-            BeadType::Sidechain => "CB",
+            BeadType::Residue | BeadType::Titratable => "CA",
+            BeadType::Virtual => "CB",
             BeadType::Ntr => "N",
             BeadType::Ctr => "O",
             BeadType::Ion => &b.res_name,
@@ -247,7 +247,7 @@ struct AtomType {
 
 /// Assign each bead to a topology type and return per-bead type names.
 ///
-/// Backbone beads use their residue name (e.g., ALA, MET).
+/// Residue beads use their residue name (e.g., ALA, MET).
 /// Titratable sites with the same element, mass, and charge (within 1%)
 /// are merged into a single type; otherwise they get unique numbered
 /// names (e.g., O1, O2, N1).
@@ -264,7 +264,7 @@ fn assign_types(beads: &[Bead], merge_tol: f64) -> (Vec<AtomType>, Vec<String>) 
 
     for b in beads {
         match b.bead_type {
-            BeadType::Backbone | BeadType::Ion => {
+            BeadType::Residue | BeadType::Ion => {
                 // All beads of the same residue type share identical FF parameters
                 if !types.iter().any(|t| t.name == b.res_name) {
                     types.push(AtomType {
@@ -278,11 +278,11 @@ fn assign_types(beads: &[Bead], merge_tol: f64) -> (Vec<AtomType>, Vec<String>) 
                 }
                 bead_type_names.push(b.res_name.clone());
             }
-            BeadType::Sidechain | BeadType::Ntr | BeadType::Ctr | BeadType::Titratable => {
+            BeadType::Virtual | BeadType::Ntr | BeadType::Ctr | BeadType::Titratable => {
                 // Merge sites with same element/residue and charge (within tolerance).
-                // Titratable (single-bead whole-residue) ignores mass like Backbone does,
+                // Titratable (single-bead whole-residue) ignores mass like Residue does,
                 // since atom-count variations across instances are not physically meaningful.
-                // Sidechain/Ntr/Ctr also require mass to match, as they are sub-residue beads.
+                // Virtual/Ntr/Ctr also require mass to match, as they are sub-residue beads.
                 let existing_idx = types.iter().position(|t| {
                     t.res_name == b.res_name
                         && (b.bead_type == BeadType::Titratable || t.mass == b.mass)
@@ -357,13 +357,15 @@ fn format_topology(
     let mut out = format!("# model: {cg}\natoms:\n");
     for t in types {
         let sc_comment =
-            if matches!(cg, CgPolicy::Multi) && t.bead_type == cgkitten::BeadType::Sidechain {
-                " # titratable sidechain"
+            if matches!(cg, CgPolicy::Multi) && t.bead_type == cgkitten::BeadType::Virtual {
+                " # virtual titratable site"
             } else {
                 ""
             };
-        let ff_fields = ff
-            .and_then(|f| f.params(&t.res_name, t.bead_type))
+        let ff_params = ff.and_then(|f| f.params(&t.res_name, t.bead_type));
+        // Use canonical model mass when available; fall back to mass computed from atomic coords.
+        let mass = ff_params.map(|p| p.mass).unwrap_or(t.mass);
+        let ff_fields = ff_params
             .map(|p| {
                 if p.lambda > 0.0 {
                     format!(
@@ -378,7 +380,7 @@ fn format_topology(
         writeln!(
             out,
             "  - {{charge: {:.4}, mass: {:.2}, name: {}{}}}{}",
-            t.charge, t.mass, t.name, ff_fields, sc_comment,
+            t.charge, mass, t.name, ff_fields, sc_comment,
         )
         .expect("writing to String is infallible");
     }

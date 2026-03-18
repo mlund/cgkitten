@@ -438,7 +438,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
 
         let sc = beads
             .iter()
-            .position(|b| b.bead_type == BeadType::Sidechain)
+            .position(|b| b.bead_type == BeadType::Virtual)
             .unwrap();
         assert!(
             (result.charges[sc] + 1.0).abs() < 0.05,
@@ -483,7 +483,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
 
         let sc = beads
             .iter()
-            .position(|b| b.bead_type == BeadType::Sidechain)
+            .position(|b| b.bead_type == BeadType::Virtual)
             .unwrap();
         assert!(
             (result.charges[sc] + 0.5).abs() < 0.05,
@@ -516,7 +516,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 chain_id: "A".into(),
                 res_seq: (i + 1) as i32,
                 mass: 0.0,
-                bead_type: BeadType::Backbone,
+                bead_type: BeadType::Residue,
             });
             beads.push(Bead {
                 x,
@@ -527,7 +527,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 chain_id: "A".into(),
                 res_seq: (i + 1) as i32,
                 mass: 0.0,
-                bead_type: BeadType::Sidechain,
+                bead_type: BeadType::Virtual,
             });
         }
 
@@ -560,7 +560,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 chain_id: "A".into(),
                 res_seq: 1,
                 mass: 0.0,
-                bead_type: BeadType::Backbone,
+                bead_type: BeadType::Residue,
             },
             Bead {
                 x: 5.0,
@@ -571,7 +571,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 chain_id: "A".into(),
                 res_seq: 1,
                 mass: 0.0,
-                bead_type: BeadType::Sidechain,
+                bead_type: BeadType::Virtual,
             },
             Bead {
                 x: 10.0,
@@ -582,7 +582,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 chain_id: "A".into(),
                 res_seq: 2,
                 mass: 0.0,
-                bead_type: BeadType::Backbone,
+                bead_type: BeadType::Residue,
             },
             Bead {
                 x: 12.0,
@@ -593,7 +593,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 chain_id: "A".into(),
                 res_seq: 2,
                 mass: 0.0,
-                bead_type: BeadType::Sidechain,
+                bead_type: BeadType::Virtual,
             },
         ];
 

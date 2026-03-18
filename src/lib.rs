@@ -65,10 +65,10 @@ pub struct Bead {
 /// Classification of a coarse-grained bead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BeadType {
-    /// Center-of-mass bead for the residue backbone + side-chain.
-    Backbone,
-    /// Extra bead for a titratable side-chain group.
-    Sidechain,
+    /// Center-of-mass bead carrying the full residue mass (backbone + sidechain atoms).
+    Residue,
+    /// Massless virtual bead placed at the titratable charge centre (e.g. Glu OE1/OE2).
+    Virtual,
     /// N-terminal group.
     Ntr,
     /// C-terminal group.
@@ -80,11 +80,11 @@ pub enum BeadType {
 }
 
 impl BeadType {
-    /// True for bead types that carry a titratable charge (sidechain, N-/C-terminal, titratable).
+    /// True for bead types that carry a titratable charge (virtual, N-/C-terminal, titratable).
     pub fn is_titratable(self) -> bool {
         matches!(
             self,
-            Self::Sidechain | Self::Ntr | Self::Ctr | Self::Titratable
+            Self::Virtual | Self::Ntr | Self::Ctr | Self::Titratable
         )
     }
 }
@@ -92,8 +92,8 @@ impl BeadType {
 impl std::fmt::Display for BeadType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Backbone => write!(f, "backbone"),
-            Self::Sidechain => write!(f, "sidechain"),
+            Self::Residue => write!(f, "residue"),
+            Self::Virtual => write!(f, "virtual"),
             Self::Ntr => write!(f, "NTR"),
             Self::Ctr => write!(f, "CTR"),
             Self::Ion => write!(f, "ion"),
@@ -316,10 +316,10 @@ impl CoarseGrain for MultiBead {
         atoms: &[&AtomRecord],
         is_ss_bonded: bool,
     ) -> Vec<Bead> {
-        let mut beads = vec![make_residue_bead(key, atoms, BeadType::Backbone)];
+        let mut beads = vec![make_residue_bead(key, atoms, BeadType::Residue)];
 
         if let Some(group) = titratable_group_unless_ss(key, &atoms[0].res_name, is_ss_bonded)
-            && let Some(bead) = make_titratable_bead(key, atoms, group, BeadType::Sidechain)
+            && let Some(bead) = make_titratable_bead(key, atoms, group, BeadType::Virtual)
         {
             beads.push(bead);
         }
@@ -342,7 +342,7 @@ impl CoarseGrain for SingleBead {
             if titratable_group_unless_ss(key, &atoms[0].res_name, is_ss_bonded).is_some() {
                 BeadType::Titratable
             } else {
-                BeadType::Backbone
+                BeadType::Residue
             };
 
         vec![make_residue_bead(key, atoms, bead_type)]
@@ -534,7 +534,7 @@ fn compute_multipole(beads: &[Bead], charges: &[f64]) -> Multipole {
 pub(crate) fn res_name_map(beads: &[Bead]) -> HashMap<(String, i32), String> {
     beads
         .iter()
-        .filter(|b| matches!(b.bead_type, BeadType::Backbone | BeadType::Titratable))
+        .filter(|b| matches!(b.bead_type, BeadType::Residue | BeadType::Titratable))
         .map(|b| ((b.chain_id.clone(), b.res_seq), b.res_name.clone()))
         .collect()
 }
@@ -545,7 +545,7 @@ pub(crate) fn titratable_group_for_bead(
     res_names: &HashMap<(String, i32), String>,
 ) -> Option<&'static TitratableGroup> {
     match bead.bead_type {
-        BeadType::Sidechain => res_names
+        BeadType::Virtual => res_names
             .get(&(bead.chain_id.clone(), bead.res_seq))
             .and_then(|name| residue::find_titratable_group(name)),
         BeadType::Titratable => residue::find_titratable_group(&bead.res_name),
@@ -732,13 +732,13 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
         // ALA backbone has zero charge
         let ala = &beads[0];
         assert_eq!(ala.res_name, "ALA");
-        assert_eq!(ala.bead_type, BeadType::Backbone);
+        assert_eq!(ala.bead_type, BeadType::Residue);
         assert!(ala.charge.abs() < 1e-10);
 
         // GLU sidechain bead exists, named by element
         let glu_sc = beads
             .iter()
-            .find(|b| b.bead_type == BeadType::Sidechain && b.res_seq == 2)
+            .find(|b| b.bead_type == BeadType::Virtual && b.res_seq == 2)
             .unwrap();
         assert_eq!(glu_sc.res_name, "O");
 
@@ -757,7 +757,7 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
         // GLU sidechain should have negative charge at pH 7
         let glu_sc = charged
             .iter()
-            .find(|b| b.bead_type == BeadType::Sidechain && b.res_seq == 2)
+            .find(|b| b.bead_type == BeadType::Virtual && b.res_seq == 2)
             .unwrap();
         assert!(
             glu_sc.charge < -0.9,
@@ -783,7 +783,7 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
         assert!(
             charged
                 .iter()
-                .filter(|b| b.bead_type == BeadType::Backbone)
+                .filter(|b| b.bead_type == BeadType::Residue)
                 .all(|b| b.charge.abs() < 1e-10),
             "backbone beads should have zero charge"
         );
@@ -807,7 +807,7 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
         let beads = coarse_grain(TEST_CIF.as_bytes());
         let sc_beads: Vec<_> = beads
             .iter()
-            .filter(|b| b.bead_type == BeadType::Sidechain)
+            .filter(|b| b.bead_type == BeadType::Virtual)
             .collect();
         assert!(!sc_beads.is_empty(), "expected at least one sidechain bead");
         for b in &sc_beads {
@@ -827,7 +827,7 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
         let beads = coarse_grain(TEST_CIF.as_bytes());
         let ala = beads
             .iter()
-            .find(|b| b.bead_type == BeadType::Backbone && b.res_seq == 1)
+            .find(|b| b.bead_type == BeadType::Residue && b.res_seq == 1)
             .unwrap();
         assert!((ala.x - 1.598423).abs() < 1e-4, "ALA COM x: {}", ala.x);
         assert!((ala.y - (-0.575399)).abs() < 1e-4, "ALA COM y: {}", ala.y);
@@ -843,7 +843,7 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
 
         let glu_sc = beads
             .iter()
-            .find(|b| b.bead_type == BeadType::Sidechain && b.res_seq == 2)
+            .find(|b| b.bead_type == BeadType::Virtual && b.res_seq == 2)
             .unwrap();
         assert!((glu_sc.x - 7.35).abs() < 0.01, "GLU SC x: {}", glu_sc.x);
         assert!((glu_sc.y - 0.1).abs() < 0.01, "GLU SC y: {}", glu_sc.y);
@@ -910,7 +910,7 @@ ATOM 6 SG CYS A 20 53.500 51.500 50.000 S . 1
 "#;
         let beads = coarse_grain(cif.as_bytes());
         assert_eq!(beads.len(), 3, "beads: {beads:#?}");
-        assert!(!beads.iter().any(|b| b.bead_type == BeadType::Sidechain));
+        assert!(!beads.iter().any(|b| b.bead_type == BeadType::Virtual));
     }
 
     #[test]
@@ -941,7 +941,7 @@ ATOM 8 SG CYS A 20 5.500 1.500 0.000 S . 1
 "#;
         let beads = coarse_grain(cif.as_bytes());
         assert_eq!(beads.len(), 3, "beads: {beads:#?}");
-        assert!(!beads.iter().any(|b| b.bead_type == BeadType::Sidechain));
+        assert!(!beads.iter().any(|b| b.bead_type == BeadType::Virtual));
     }
 
     #[test]
@@ -968,7 +968,7 @@ ATOM 4 SG CYS A 5 3.500 1.500 0.000 S . 1
 "#;
         let beads = coarse_grain(cif.as_bytes());
         assert_eq!(beads.len(), 3, "beads: {beads:#?}");
-        assert!(beads.iter().any(|b| b.bead_type == BeadType::Sidechain));
+        assert!(beads.iter().any(|b| b.bead_type == BeadType::Virtual));
     }
 
     #[test]
@@ -1014,9 +1014,9 @@ ATOM 14 OXT ALA A 2 6.800 -1.800 0.500 O . 1
             3,
             "LYS should have 3 beads: {lys_beads:#?}"
         );
-        assert!(lys_beads.iter().any(|b| b.bead_type == BeadType::Backbone));
+        assert!(lys_beads.iter().any(|b| b.bead_type == BeadType::Residue));
         assert!(lys_beads.iter().any(|b| b.bead_type == BeadType::Ntr));
-        assert!(lys_beads.iter().any(|b| b.bead_type == BeadType::Sidechain));
+        assert!(lys_beads.iter().any(|b| b.bead_type == BeadType::Virtual));
 
         // NTR bead at N atom position
         let ntr = lys_beads
@@ -1029,7 +1029,7 @@ ATOM 14 OXT ALA A 2 6.800 -1.800 0.500 O . 1
         // Sidechain bead at NZ position
         let sc = lys_beads
             .iter()
-            .find(|b| b.bead_type == BeadType::Sidechain)
+            .find(|b| b.bead_type == BeadType::Virtual)
             .unwrap();
         assert_eq!(sc.res_name, "N");
         assert!((sc.x - 8.0).abs() < 0.01);
