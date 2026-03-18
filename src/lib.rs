@@ -451,7 +451,11 @@ fn records_to_beads(
     } else {
         disulfide_bonds_to_keys(disulfide_bonds)
     };
-    debug!("{} disulfide-bonded CYS residues", ss_bonded.len());
+    if ss_bonded.is_empty() {
+        info!("No disulfide bonds detected");
+    } else {
+        info!("{} disulfide-bonded CYS residues detected", ss_bonded.len());
+    }
 
     let chain_first_last = find_chain_terminals(&residue_groups);
 
@@ -790,7 +794,25 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
     }
 
     #[test]
+    fn backbone_bead_at_com() {
+        // ALA has atoms of different elements (N, C, O) so geometric center != COM.
+        // This test would fail if center_and_mass used unweighted averaging.
+        // Expected COM computed from TEST_CIF atom coordinates and IUPAC masses.
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let ala = beads
+            .iter()
+            .find(|b| b.bead_type == BeadType::Backbone && b.res_seq == 1)
+            .unwrap();
+        assert!((ala.x - 1.598423).abs() < 1e-4, "ALA COM x: {}", ala.x);
+        assert!((ala.y - (-0.575399)).abs() < 1e-4, "ALA COM y: {}", ala.y);
+        assert!(ala.z.abs() < 1e-10, "ALA COM z: {}", ala.z);
+    }
+
+    #[test]
     fn sidechain_bead_position() {
+        // GLU sidechain center atoms (OE1, OE2) are both oxygen — same mass —
+        // so geometric center and COM coincide. This test checks the position
+        // but does NOT verify mass-weighting; see backbone_bead_at_com for that.
         let beads = coarse_grain(TEST_CIF.as_bytes());
 
         let glu_sc = beads

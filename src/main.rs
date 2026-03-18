@@ -254,6 +254,22 @@ fn assign_types(beads: &[Bead]) -> (Vec<AtomType>, Vec<String>) {
         }
     }
 
+    // Strip trailing "1" from names that have only a single variant (e.g. "LYS1" -> "LYS")
+    for (res_name, &count) in &counters {
+        if count == 1 {
+            let old = format!("{res_name}1");
+            let new = res_name.clone();
+            if let Some(t) = types.iter_mut().find(|t| t.name == old) {
+                t.name = new.clone();
+            }
+            for n in bead_type_names.iter_mut() {
+                if *n == old {
+                    *n = new.clone();
+                }
+            }
+        }
+    }
+
     let n_before = beads.iter().filter(|b| b.bead_type.is_titratable()).count();
     let n_after = types.iter().filter(|t| t.bead_type.is_titratable()).count();
     if n_after < n_before {
@@ -271,21 +287,31 @@ fn format_topology(
     types: &[AtomType],
     ff: Option<&dyn cif2top::forcefield::ForceField>,
     pairs: &[cif2top::forcefield::PairInteraction],
+    cg: &CgPolicy,
 ) -> String {
-    let mut out = String::from("atoms:\n");
+    let model_label = match cg {
+        CgPolicy::Multi => "multi",
+        CgPolicy::Single => "single",
+    };
+    let mut out = format!("# model: {model_label}\natoms:\n");
     for t in types {
+        let sc_comment = if matches!(cg, CgPolicy::Multi) && t.bead_type == cif2top::BeadType::Sidechain {
+            " # titratable sidechain"
+        } else {
+            ""
+        };
         if let Some(params) = ff.and_then(|f| f.params(&t.res_name, t.bead_type)) {
             writeln!(
                 out,
-                "  - {{charge: {:.4}, mass: {:.2}, name: {}, σ: {}, ε: {}, hydrophobicity: !Lambda {}}}",
-                t.charge, t.mass, t.name, params.sigma, params.epsilon, params.lambda,
+                "  - {{charge: {:.4}, mass: {:.2}, name: {}, σ: {}, ε: {}, hydrophobicity: !Lambda {}}}{}",
+                t.charge, t.mass, t.name, params.sigma, params.epsilon, params.lambda, sc_comment,
             )
             .unwrap();
         } else {
             writeln!(
                 out,
-                "  - {{charge: {:.4}, mass: {:.2}, name: {}}}",
-                t.charge, t.mass, t.name,
+                "  - {{charge: {:.4}, mass: {:.2}, name: {}}}{}",
+                t.charge, t.mass, t.name, sc_comment,
             )
             .unwrap();
         }
@@ -399,7 +425,9 @@ fn main() -> io::Result<()> {
             file.write_all(text.as_bytes())?;
 
             {
-                let yaml = format_topology(&types, ff.as_deref(), &pairs);
+                let mut types = types;
+                types.sort_by(|a, b| a.name.cmp(&b.name));
+                let yaml = format_topology(&types, ff.as_deref(), &pairs, &common.cg);
                 let mut file = File::create(&top)?;
                 file.write_all(yaml.as_bytes())?;
                 info!("Topology saved to {}", top.display());
