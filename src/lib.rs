@@ -25,6 +25,8 @@ pub(crate) mod mmcif;
 pub(crate) mod pdb;
 /// Amino acid residue definitions and constants.
 pub mod residue;
+/// Topology type assignment for coarse-grained beads.
+pub mod topology;
 
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;

@@ -10,7 +10,8 @@ use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
 
 use cgkitten::{
-    Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with, coarse_grain_with,
+    Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with,
+    coarse_grain_with, topology::Topology,
 };
 
 /// Convert mmCIF protein structures to coarse-grained representation.
@@ -236,133 +237,24 @@ fn format_xyz(beads: &[Bead], names: &[String], cmdline: &str) -> String {
     out
 }
 
-/// A registered atom type for topology output.
-struct AtomType {
-    name: String,
-    charge: f64,
-    mass: f64,
-    res_name: String,
-    bead_type: cgkitten::BeadType,
-}
-
-/// Assign each bead to a topology type and return per-bead type names.
-///
-/// Residue beads use their residue name (e.g., ALA, MET).
-/// Titratable sites with the same element, mass, and charge (within 1%)
-/// are merged into a single type; otherwise they get unique numbered
-/// names (e.g., O1, O2, N1).
-fn assign_types(beads: &[Bead], merge_tol: f64) -> (Vec<AtomType>, Vec<String>) {
-    use cgkitten::BeadType;
-
-    let mut types: Vec<AtomType> = Vec::new();
-    let mut counters: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    // Per-bead type name, matching the topology entry
-    let mut bead_type_names: Vec<String> = Vec::with_capacity(beads.len());
-    // Accumulate (charge_sum, count) per titratable type so we can average at the end.
-    // Indexed in parallel with `types`; non-titratable entries are unused (0, 0).
-    let mut charge_acc: Vec<(f64, usize)> = Vec::new();
-
-    for b in beads {
-        match b.bead_type {
-            BeadType::Residue | BeadType::Ion => {
-                // All beads of the same residue type share identical FF parameters
-                if !types.iter().any(|t| t.name == b.res_name) {
-                    types.push(AtomType {
-                        name: b.res_name.clone(),
-                        charge: b.charge,
-                        mass: b.mass,
-                        res_name: b.res_name.clone(),
-                        bead_type: b.bead_type,
-                    });
-                    charge_acc.push((0.0, 0));
-                }
-                bead_type_names.push(b.res_name.clone());
-            }
-            BeadType::Virtual | BeadType::Ntr | BeadType::Ctr | BeadType::Titratable => {
-                // Merge sites with same element/residue and charge (within tolerance).
-                // Titratable (single-bead whole-residue) ignores mass like Residue does,
-                // since atom-count variations across instances are not physically meaningful.
-                // Virtual/Ntr/Ctr also require mass to match, as they are sub-residue beads.
-                let existing_idx = types.iter().position(|t| {
-                    t.res_name == b.res_name
-                        && (b.bead_type == BeadType::Titratable || t.mass == b.mass)
-                        && (t.charge - b.charge).abs() < merge_tol
-                        && t.bead_type.is_titratable()
-                });
-                if let Some(idx) = existing_idx {
-                    // Accumulate charge for mean calculation
-                    charge_acc[idx].0 += b.charge;
-                    charge_acc[idx].1 += 1;
-                    bead_type_names.push(types[idx].name.clone());
-                } else {
-                    let counter = counters.entry(b.res_name.clone()).or_insert(0);
-                    *counter += 1;
-                    let name = format!("{}{}", b.res_name, counter);
-                    bead_type_names.push(name.clone());
-                    charge_acc.push((b.charge, 1));
-                    types.push(AtomType {
-                        name,
-                        charge: b.charge,
-                        mass: b.mass,
-                        res_name: b.res_name.clone(),
-                        bead_type: b.bead_type,
-                    });
-                }
-            }
-        }
-    }
-
-    // Replace first-seen charges with mean charge across all merged beads.
-    for (t, (sum, count)) in types.iter_mut().zip(charge_acc.iter()) {
-        if *count > 0 {
-            t.charge = sum / *count as f64;
-        }
-    }
-
-    // Strip trailing "1" from names that have only a single variant (e.g. "LYS1" -> "LYS")
-    for (res_name, &count) in &counters {
-        if count == 1 {
-            let old = format!("{res_name}1");
-            let new = res_name.clone();
-            if let Some(t) = types.iter_mut().find(|t| t.name == old) {
-                t.name = new.clone();
-            }
-            for n in bead_type_names.iter_mut() {
-                if *n == old {
-                    *n = new.clone();
-                }
-            }
-        }
-    }
-
-    let n_before = beads.iter().filter(|b| b.bead_type.is_titratable()).count();
-    let n_after = types.iter().filter(|t| t.bead_type.is_titratable()).count();
-    if n_after < n_before {
-        info!(
-            "Merged {n_before} titratable sites into {n_after} unique types (tolerance {:.0}%)",
-            merge_tol * 100.0
-        );
-    }
-
-    (types, bead_type_names)
-}
-
 /// Format topology as YAML with unique atom types.
 fn format_topology(
-    types: &[AtomType],
+    topo: &Topology,
     ff: Option<&dyn cgkitten::forcefield::ForceField>,
     pairs: &[cgkitten::forcefield::PairInteraction],
     cg: &CgPolicy,
 ) -> String {
     let mut out = format!("# model: {cg}\natoms:\n");
-    for t in types {
+    let mut known: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for t in topo.types() {
+        known.insert(t.name);
         let sc_comment =
             if matches!(cg, CgPolicy::Multi) && t.bead_type == cgkitten::BeadType::Virtual {
                 " # virtual titratable site"
             } else {
                 ""
             };
-        let ff_params = ff.and_then(|f| f.params(&t.res_name, t.bead_type));
+        let ff_params = ff.and_then(|f| f.params(t.res_name, t.bead_type));
         // Use canonical model mass when available (mass > 0 in the force field).
         // mass == 0.0 is the sentinel for virtual/terminal/ion beads whose mass comes
         // from atomic coordinates instead (ions) or is genuinely zero (virtual sites).
@@ -396,7 +288,6 @@ fn format_topology(
     // Pair entries are siblings of `default:` under `nonbonded:`,
     // so Faunus uses these instead of the default mixing rule for
     // the specified type pairs.
-    let known: std::collections::HashSet<&str> = types.iter().map(|t| t.name.as_str()).collect();
     for pair in pairs {
         for name in [pair.name_a.as_str(), pair.name_b.as_str()] {
             if !known.contains(name) {
@@ -512,17 +403,18 @@ fn run_convert(
     );
 
     // Assign topology type names first so coordinate files use matching names
-    let (types, names) = assign_types(&charged, merge_tol);
+    let topo = Topology::new(&charged, merge_tol);
+    let names = topo.bead_names();
 
     // Collect (name, params) for all types that have FF parameters.
     // hydrophobic_pairs() filters this down to hydrophobic residues only,
     // so it's safe to pass everything — non-hydrophobic types are ignored.
-    let hp_types: Vec<(String, cgkitten::forcefield::BeadParams)> = types
-        .iter()
+    let hp_types: Vec<(String, cgkitten::forcefield::BeadParams)> = topo
+        .types()
         .filter_map(|t| {
             ff.as_deref()
-                .and_then(|f| f.params(&t.res_name, t.bead_type))
-                .map(|p| (t.name.clone(), p))
+                .and_then(|f| f.params(t.res_name, t.bead_type))
+                .map(|p| (t.name.to_string(), p))
         })
         .collect();
     let pairs = cgkitten::forcefield::hydrophobic_pairs(
@@ -534,9 +426,9 @@ fn run_convert(
     if let Some(path) = output {
         // Explicit output: write only the requested format.
         let text = if path.extension().is_some_and(|e| e == "xyz") {
-            format_xyz(&charged, &names, &cmdline)
+            format_xyz(&charged, names, &cmdline)
         } else {
-            format_pqr(&charged, &names, &calc)
+            format_pqr(&charged, names, &calc)
         };
         let mut file = File::create(&path)?;
         file.write_all(text.as_bytes())?;
@@ -546,9 +438,9 @@ fn run_convert(
         for ext in ["pqr", "xyz"] {
             let path = default_output(&common.input, ext);
             let text = if ext == "xyz" {
-                format_xyz(&charged, &names, &cmdline)
+                format_xyz(&charged, names, &cmdline)
             } else {
-                format_pqr(&charged, &names, &calc)
+                format_pqr(&charged, names, &calc)
             };
             let mut file = File::create(&path)?;
             file.write_all(text.as_bytes())?;
@@ -556,10 +448,8 @@ fn run_convert(
         }
     }
 
-    let mut types = types;
-    types.sort_by(|a, b| a.name.cmp(&b.name));
     let yaml =
-        format!("# {cmdline}\n") + &format_topology(&types, ff.as_deref(), &pairs, &common.cg);
+        format!("# {cmdline}\n") + &format_topology(&topo, ff.as_deref(), &pairs, &common.cg);
     let mut file = File::create(&top)?;
     file.write_all(yaml.as_bytes())?;
     info!("Topology saved to {}", top.display());
