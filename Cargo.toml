@@ -32,7 +32,3 @@ rayon = { version = "1", optional = true }
 rgb = { version = "0.8", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 textplots = { version = "0.8", optional = true }
-
-[profile.release]
-strip = true
-lto = true
