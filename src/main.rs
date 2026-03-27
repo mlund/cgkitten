@@ -263,14 +263,10 @@ fn format_topology(
             .unwrap_or(t.mass);
         let ff_fields = ff_params
             .map(|p| {
-                if p.lambda > 0.0 {
-                    format!(
-                        ", σ: {}, ε: {}, hydrophobicity: !Lambda {}",
-                        p.sigma, p.epsilon, p.lambda
-                    )
-                } else {
-                    format!(", σ: {}, ε: {}", p.sigma, p.epsilon)
-                }
+                format!(
+                    ", σ: {}, ε: {}, hydrophobicity: !Lambda {}",
+                    p.sigma, p.epsilon, p.lambda
+                )
             })
             .unwrap_or_default();
         writeln!(
