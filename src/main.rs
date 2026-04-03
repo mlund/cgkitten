@@ -281,18 +281,18 @@ fn format_topology(
         out.push_str(f.system_yaml());
     }
 
-    // Pair entries are siblings of `default:` under `nonbonded:`,
-    // so Faunus uses these instead of the default mixing rule for
-    // the specified type pairs.
-    for pair in pairs {
-        for name in [pair.name_a.as_str(), pair.name_b.as_str()] {
-            if !known.contains(name) {
-                log::warn!(
-                    "Pair references unknown atom type '{name}' — Faunus will silently ignore this entry"
-                );
+    if !pairs.is_empty() {
+        out.push_str("      replace:\n");
+        for pair in pairs {
+            for name in [pair.name_a.as_str(), pair.name_b.as_str()] {
+                if !known.contains(name) {
+                    log::warn!(
+                        "Pair references unknown atom type '{name}' — Faunus will silently ignore this entry"
+                    );
+                }
             }
+            out.push_str(&cgkitten::forcefield::format_pair_yaml(pair));
         }
-        out.push_str(&cgkitten::forcefield::format_pair_yaml(pair));
     }
 
     out
