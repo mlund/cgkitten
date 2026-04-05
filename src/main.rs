@@ -11,7 +11,7 @@ use textplots::{Chart, ColorPlot, Shape};
 
 use cgkitten::{
     Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with,
-    coarse_grain_with, format_topology, format_xyz, topology::Topology,
+    coarse_grain_with, filter_chains, format_topology, format_xyz, topology::Topology,
 };
 
 /// Convert mmCIF protein structures to coarse-grained representation.
@@ -159,18 +159,7 @@ fn read_beads(
     }
 }
 
-/// Filter beads to the requested chains; if `chains` is empty all beads are kept.
-fn filter_chains(beads: Vec<Bead>, chains: &[String]) -> Vec<Bead> {
-    if chains.is_empty() {
-        return beads;
-    }
-    let kept: Vec<_> = beads
-        .into_iter()
-        .filter(|b| chains.iter().any(|c| c == &b.chain_id))
-        .collect();
-    info!("Chain filter {:?}: {} beads retained", chains, kept.len());
-    kept
-}
+// Chain filtering is provided by cgkitten::filter_chains
 
 fn cg_policy(p: &CgPolicy) -> &'static dyn cgkitten::CoarseGrain {
     match p {

@@ -357,6 +357,21 @@ impl CoarseGrain for SingleBead {
 // Public functions
 // ---------------------------------------------------------------------------
 
+/// Filter beads to keep only the requested chains.
+///
+/// If `chains` is empty, all beads are returned unchanged.
+pub fn filter_chains(beads: Vec<Bead>, chains: &[impl AsRef<str>]) -> Vec<Bead> {
+    if chains.is_empty() {
+        return beads;
+    }
+    let kept: Vec<_> = beads
+        .into_iter()
+        .filter(|b| chains.iter().any(|c| c.as_ref() == b.chain_id))
+        .collect();
+    info!("Chain filter: {} beads retained", kept.len());
+    kept
+}
+
 /// Convert mmCIF data to coarse-grained beads using the default multi-bead policy.
 ///
 /// Reads atom records, groups by residue, and creates backbone and titratable
@@ -759,18 +774,20 @@ pub fn coarse_grain_to_files(
     policy: &dyn CoarseGrain,
     merge_tolerance: f64,
     scaling: forcefield::HydrophobicScaling,
+    chains: &[impl AsRef<str>],
     xyz_path: impl AsRef<Path>,
     topology_path: impl AsRef<Path>,
 ) -> Result<(), String> {
     let xyz_path = xyz_path.as_ref();
     let topology_path = topology_path.as_ref();
 
-    // 1. Coarse-grain
+    // 1. Coarse-grain and optionally filter by chain
     let beads = if is_pdb {
         coarse_grain_pdb_with(reader, policy)
     } else {
         coarse_grain_with(reader, policy)
     };
+    let beads = filter_chains(beads, chains);
 
     // 2. Compute charges
     charge_calc.log_conditions();

@@ -1,6 +1,6 @@
 [package]
 name = "cgkitten"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Convert mmCIF/PDB protein structures to coarse-grained representation with Monte Carlo titration"
 authors = ["Mikael Lund <lyssky@icloud.com>"]
