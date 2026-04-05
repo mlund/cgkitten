@@ -241,13 +241,11 @@ fn format_xyz(beads: &[Bead], names: &[String], cmdline: &str) -> String {
 fn format_topology(
     topo: &Topology,
     ff: Option<&dyn cgkitten::forcefield::ForceField>,
-    pairs: &[cgkitten::forcefield::PairInteraction],
     cg: &CgPolicy,
 ) -> String {
     let mut out = format!("# model: {cg}\natoms:\n");
-    let mut known: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut ff_types: Vec<(&str, f64, cgkitten::forcefield::BeadParams)> = Vec::new();
     for t in topo.types() {
-        known.insert(t.name);
         let sc_comment =
             if matches!(cg, CgPolicy::Multi) && t.bead_type == cgkitten::BeadType::Virtual {
                 " # virtual titratable site"
@@ -255,20 +253,15 @@ fn format_topology(
                 ""
             };
         let ff_params = ff.and_then(|f| f.params(t.res_name, t.bead_type));
-        // Use canonical model mass when available (mass > 0 in the force field).
-        // mass == 0.0 is the sentinel for virtual/terminal/ion beads whose mass comes
-        // from atomic coordinates instead (ions) or is genuinely zero (virtual sites).
         let mass = ff_params
             .and_then(|p| (p.mass > 0.0).then_some(p.mass))
             .unwrap_or(t.mass);
-        let ff_fields = ff_params
-            .map(|p| {
-                format!(
-                    ", σ: {}, ε: {}, hydrophobicity: !Lambda {}",
-                    p.sigma, p.epsilon, p.lambda
-                )
-            })
-            .unwrap_or_default();
+        let ff_fields = if let Some(p) = ff_params {
+            ff_types.push((t.name, t.charge, p));
+            format!(", {}", ff.unwrap().format_atom_fields(&p))
+        } else {
+            String::new()
+        };
         writeln!(
             out,
             "  - {{charge: {:.4}, mass: {:.2}, name: {}{}}}{}",
@@ -278,21 +271,7 @@ fn format_topology(
     }
 
     if let Some(f) = ff {
-        out.push_str(f.system_yaml());
-    }
-
-    if !pairs.is_empty() {
-        out.push_str("      replace:\n");
-        for pair in pairs {
-            for name in [pair.name_a.as_str(), pair.name_b.as_str()] {
-                if !known.contains(name) {
-                    log::warn!(
-                        "Pair references unknown atom type '{name}' — Faunus will silently ignore this entry"
-                    );
-                }
-            }
-            out.push_str(&cgkitten::forcefield::format_pair_yaml(pair));
-        }
+        out.push_str(&f.nonbonded_yaml(&ff_types));
     }
 
     out
@@ -352,8 +331,17 @@ fn run_convert(
         .ionic_strength(common.ionic_strength)
         .mc(common.mc);
 
-    let ff = cgkitten::forcefield::from_name(&model);
-    // "none" is an explicit opt-out; unknown names are errors
+    let scaling: cgkitten::forcefield::HydrophobicScaling = scale_hydrophobic
+        .as_deref()
+        .map(|s| {
+            s.parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    let ff = cgkitten::forcefield::from_name(&model, scaling)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     if ff.is_none() && model != "none" {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -376,15 +364,6 @@ fn run_convert(
         result.multipole.charge, result.multipole.dipole
     );
 
-    let scaling: cgkitten::forcefield::HydrophobicScaling = scale_hydrophobic
-        .as_deref()
-        .map(|s| {
-            s.parse()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
-        })
-        .transpose()?
-        .unwrap_or_default();
-
     if common.mc > 0 {
         info!("Titration: MC ({} steps)", common.mc);
     } else {
@@ -401,23 +380,6 @@ fn run_convert(
     // Assign topology type names first so coordinate files use matching names
     let topo = Topology::new(&charged, merge_tol);
     let names = topo.bead_names();
-
-    // Collect (name, params) for all types that have FF parameters.
-    // hydrophobic_pairs() filters this down to hydrophobic residues only,
-    // so it's safe to pass everything — non-hydrophobic types are ignored.
-    let hp_types: Vec<(String, cgkitten::forcefield::BeadParams)> = topo
-        .types()
-        .filter_map(|t| {
-            ff.as_deref()
-                .and_then(|f| f.params(t.res_name, t.bead_type))
-                .map(|p| (t.name.to_string(), p))
-        })
-        .collect();
-    let pairs = cgkitten::forcefield::hydrophobic_pairs(
-        &hp_types,
-        cgkitten::residue::HYDROPHOBIC_RESIDUES,
-        &scaling,
-    );
 
     if let Some(path) = output {
         // Explicit output: write only the requested format.
@@ -444,8 +406,7 @@ fn run_convert(
         }
     }
 
-    let yaml =
-        format!("# {cmdline}\n") + &format_topology(&topo, ff.as_deref(), &pairs, &common.cg);
+    let yaml = format!("# {cmdline}\n") + &format_topology(&topo, ff.as_deref(), &common.cg);
     let mut file = File::create(&top)?;
     file.write_all(yaml.as_bytes())?;
     info!("Topology saved to {}", top.display());

@@ -54,11 +54,15 @@ cat structure.cif | cgkitten convert
 # Single format output
 cgkitten structure.cif convert -o output.xyz
 
-# Scale hydrophobic pair interactions (λ increased by 20%)
+# Kim-Hummer force field
+cgkitten structure.cif convert --model kimhummer
+
+# Scale hydrophobic pair interactions (λ increased by 20%, Calvados 3)
 cgkitten structure.cif convert --scale-hydrophobic lambda:1.2
 
-# Scale hydrophobic ε instead
+# Scale hydrophobic ε (works for both models)
 cgkitten structure.cif convert --scale-hydrophobic epsilon:0.8
+cgkitten structure.cif convert --model kh --scale-hydrophobic epsilon:0.8
 
 # Custom charge-merging tolerance (default 0.02)
 cgkitten structure.cif convert --merge-tol 0.05
@@ -117,29 +121,42 @@ independent-site approximation.
 4. **Ensemble averages**: The mean charge ⟨Z⟩, ⟨Z²⟩, dipole moment ⟨μ⟩,
    and ⟨μ²⟩ are accumulated over all sweeps as true ensemble averages.
 
-## Hydrophobic pair scaling
+## Force field models
+
+The `--model` flag selects the coarse-grained force field (default: `calvados3`).
+
+| Model | Potential | Pair section | Description |
+|-------|-----------|--------------|-------------|
+| `calvados3` | Ashbaugh-Hatch | `replace:` | Calvados 3 with σ, ε, λ per residue |
+| `kimhummer` / `kh` | Kim-Hummer | `replace:`/`append:` | Miyazawa-Jernigan contact energies |
+
+Use `--model none` to skip force field parameters entirely.
+
+### Hydrophobic pair scaling
 
 The `--scale-hydrophobic` flag generates pairwise nonbonded overrides in the
-topology for all hydrophobic residue pairs (ALA, ILE, LEU, MET, PHE, PRO, TRP,
-TYR, VAL). This is useful for modelling temperature-dependent hydrophobic
-effects without changing the global default interaction.
+topology for hydrophobic residue pairs (ALA, ILE, LEU, MET, PHE, PRO, TRP,
+TYR, VAL). Supported scaling depends on the model:
 
-Parameters are mixed using Lorentz-Berthelot combining rules (arithmetic mean
-for σ and λ, geometric mean for ε), then the chosen quantity is scaled:
+- `lambda:<factor>` — scale Ashbaugh-Hatch λ (Calvados 3 only)
+- `epsilon:<factor>` — scale well depth ε (both models)
 
-- `lambda:<factor>` — scale the Ashbaugh-Hatch hydrophobicity λ
-- `epsilon:<factor>` — scale the Lennard-Jones well depth ε
+For Calvados 3, parameters are mixed using Lorentz-Berthelot combining rules
+(arithmetic mean for σ and λ, geometric mean for ε), then the chosen quantity
+is scaled. The resulting pairs appear under `replace:` (hydrophobic residues
+are neutral, so no Coulomb to inherit).
 
-The resulting `[TypeA, TypeB]:` pair entries appear under `nonbonded:` in the
-topology YAML, overriding the `default:` mixing rule for those specific pairs.
+For Kim-Hummer, `epsilon:` scales the Miyazawa-Jernigan ε for hydrophobic pairs.
+All KH pairs are partitioned by charge: neutral pairs under `replace:` (skips
+redundant Coulomb), charged pairs under `append:` (inherits Coulomb from default).
 
 ## Topology output
 
 The topology YAML (`topology.yaml` by default, override with `--top`) contains
-atom types with charge, mass, σ, ε, and λ. Titratable site types with similar
-charges (within `--merge-tol`, default 2%) are merged into a single type using
-their mean charge. The file header records the exact command used to generate it
-for reproducibility.
+atom types with charge, mass, and force-field-specific fields (σ, ε, λ for
+Calvados 3; σ only for Kim-Hummer). Titratable site types with similar charges
+(within `--merge-tol`, default 2%) are merged into a single type using their
+mean charge. The file header records the exact command for reproducibility.
 
 ## pH scan
 
