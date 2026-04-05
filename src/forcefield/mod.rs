@@ -5,10 +5,12 @@
 
 mod calvados3;
 mod kimhummer;
+mod pasquier;
 
 use crate::BeadType;
 pub use calvados3::Calvados3;
 pub use kimhummer::KimHummer;
+pub use pasquier::Pasquier;
 
 /// Per-bead force field parameters.
 #[derive(Clone, Copy)]
@@ -98,6 +100,15 @@ pub fn from_name(
                 );
             }
             Ok(Some(Box::new(KimHummer::new(scaling))))
+        }
+        "pasquier" => {
+            if matches!(scaling, HydrophobicScaling::ScaleLambda(_)) {
+                return Err(
+                    "lambda scaling is not supported for Pasquier (use epsilon:<factor>)"
+                        .to_string(),
+                );
+            }
+            Ok(Some(Box::new(Pasquier::new(scaling))))
         }
         _ => Ok(None),
     }

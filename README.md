@@ -129,6 +129,13 @@ The `--model` flag selects the coarse-grained force field (default: `calvados3`)
 |-------|-----------|--------------|-------------|
 | `calvados3` | Ashbaugh-Hatch | `replace:` | Calvados 3 with σ, ε, λ per residue |
 | `kimhummer` / `kh` | Kim-Hummer | `replace:`/`append:` | Miyazawa-Jernigan contact energies |
+| `pasquier` | Lennard-Jones | `replace:`/`append:` | Uniform ε with KH sigmas |
+
+**Pasquier**: LJ interactions using Kim-Hummer sigma values and two epsilon classes
+from [Pasquier et al. (2023)](https://doi.org/10.1016/j.jcis.2022.08.054) Table 3
+(open conformation): ε_hh = 0.485 kT for hydrophobic–hydrophobic pairs,
+ε = 0.005 kT for all other pairs (including hydrophobic–non-hydrophobic cross terms).
+Note: σ values are from Kim-Hummer, not the original Pasquier model.
 
 Use `--model none` to skip force field parameters entirely.
 
@@ -139,22 +146,22 @@ topology for hydrophobic residue pairs (ALA, ILE, LEU, MET, PHE, PRO, TRP,
 TYR, VAL). Supported scaling depends on the model:
 
 - `lambda:<factor>` — scale Ashbaugh-Hatch λ (Calvados 3 only)
-- `epsilon:<factor>` — scale well depth ε (both models)
+- `epsilon:<factor>` — scale well depth ε (all models)
 
 For Calvados 3, parameters are mixed using Lorentz-Berthelot combining rules
 (arithmetic mean for σ and λ, geometric mean for ε), then the chosen quantity
 is scaled. The resulting pairs appear under `replace:` (hydrophobic residues
 are neutral, so no Coulomb to inherit).
 
-For Kim-Hummer, `epsilon:` scales the Miyazawa-Jernigan ε for hydrophobic pairs.
-All KH pairs are partitioned by charge: neutral pairs under `replace:` (skips
-redundant Coulomb), charged pairs under `append:` (inherits Coulomb from default).
+For Kim-Hummer and Pasquier, `epsilon:` scales ε for hydrophobic pairs only.
+Pairs are partitioned by charge: neutral under `replace:` (skips redundant
+Coulomb), charged under `append:` (inherits Coulomb from default).
 
 ## Topology output
 
 The topology YAML (`topology.yaml` by default, override with `--top`) contains
 atom types with charge, mass, and force-field-specific fields (σ, ε, λ for
-Calvados 3; σ only for Kim-Hummer). Titratable site types with similar charges
+Calvados 3; σ only for Kim-Hummer and Pasquier). Titratable site types with similar charges
 (within `--merge-tol`, default 2%) are merged into a single type using their
 mean charge. The file header records the exact command for reproducibility.
 
