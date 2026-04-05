@@ -11,7 +11,7 @@ use textplots::{Chart, ColorPlot, Shape};
 
 use cgkitten::{
     Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with,
-    coarse_grain_with, topology::Topology,
+    coarse_grain_with, format_topology, format_xyz, topology::Topology,
 };
 
 /// Convert mmCIF protein structures to coarse-grained representation.
@@ -220,63 +220,6 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
     out
 }
 
-/// Format beads as plain XYZ file (no charges).
-fn format_xyz(beads: &[Bead], names: &[String], cmdline: &str) -> String {
-    debug_assert_eq!(beads.len(), names.len(), "beads and names must be 1:1");
-    let mut out = String::new();
-    writeln!(out, "{}", beads.len()).expect("writing to String is infallible");
-    writeln!(out, "{cmdline}").expect("writing to String is infallible");
-    for (i, b) in beads.iter().enumerate() {
-        writeln!(
-            out,
-            "{:<5} {:>10.4} {:>10.4} {:>10.4}",
-            &names[i], b.x, b.y, b.z
-        )
-        .expect("writing to String is infallible");
-    }
-    out
-}
-
-/// Format topology as YAML with unique atom types.
-fn format_topology(
-    topo: &Topology,
-    ff: Option<&dyn cgkitten::forcefield::ForceField>,
-    cg: &CgPolicy,
-) -> String {
-    let mut out = format!("# model: {cg}\natoms:\n");
-    let mut ff_types: Vec<(&str, f64, cgkitten::forcefield::BeadParams)> = Vec::new();
-    for t in topo.types() {
-        let sc_comment =
-            if matches!(cg, CgPolicy::Multi) && t.bead_type == cgkitten::BeadType::Virtual {
-                " # virtual titratable site"
-            } else {
-                ""
-            };
-        let ff_params = ff.and_then(|f| f.params(t.res_name, t.bead_type));
-        let mass = ff_params
-            .and_then(|p| (p.mass > 0.0).then_some(p.mass))
-            .unwrap_or(t.mass);
-        let ff_fields = if let Some(p) = ff_params {
-            ff_types.push((t.name, t.charge, p));
-            format!(", {}", ff.unwrap().format_atom_fields(&p))
-        } else {
-            String::new()
-        };
-        writeln!(
-            out,
-            "  - {{charge: {:.4}, mass: {:.2}, name: {}{}}}{}",
-            t.charge, mass, t.name, ff_fields, sc_comment,
-        )
-        .expect("writing to String is infallible");
-    }
-
-    if let Some(f) = ff {
-        out.push_str(&f.nonbonded_yaml(&ff_types));
-    }
-
-    out
-}
-
 /// Generate pH steps over [ph_start, ph_end].
 fn ph_steps(ph_start: f64, ph_end: f64, ph_step: f64) -> Vec<f64> {
     assert!(
@@ -406,7 +349,8 @@ fn run_convert(
         }
     }
 
-    let yaml = format!("# {cmdline}\n") + &format_topology(&topo, ff.as_deref(), &common.cg);
+    let multi_bead = matches!(common.cg, CgPolicy::Multi);
+    let yaml = format!("# {cmdline}\n") + &format_topology(&topo, ff.as_deref(), multi_bead);
     let mut file = File::create(&top)?;
     file.write_all(yaml.as_bytes())?;
     info!("Topology saved to {}", top.display());

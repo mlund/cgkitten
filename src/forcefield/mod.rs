@@ -1,6 +1,6 @@
 //! Force field models for coarse-grained beads.
 //!
-//! Each model implements [`ForceField`] to provide per-residue parameters and
+//! Each model implements the `ForceField` trait to provide per-residue parameters and
 //! generate the nonbonded YAML section for Faunus topology files.
 
 mod calvados3;
@@ -110,6 +110,9 @@ pub fn from_name(
             }
             Ok(Some(Box::new(Pasquier::new(scaling))))
         }
-        _ => Ok(None),
+        "none" => Ok(None),
+        _ => Err(format!(
+            "unknown force field model: '{name}' (available: calvados3, kimhummer/kh, pasquier, none)"
+        )),
     }
 }
