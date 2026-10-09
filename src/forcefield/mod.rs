@@ -7,7 +7,7 @@ mod calvados3;
 mod kimhummer;
 mod pasquier;
 
-use crate::BeadType;
+use crate::{BeadType, residue};
 pub use calvados3::Calvados3;
 pub use kimhummer::KimHummer;
 pub use pasquier::Pasquier;
@@ -29,7 +29,13 @@ pub struct BeadParams {
 /// and generates the nonbonded YAML section.
 pub trait ForceField {
     /// Look up parameters for a bead by residue name and type.
-    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams>;
+    /// Variant names (e.g. CYX) resolve to their parent so models need not list them.
+    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
+        self.residue_params(residue::parent_residue(res_name), bead_type)
+    }
+
+    /// Model-specific lookup by canonical residue name. Call `params` instead.
+    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams>;
 
     /// FF-specific per-atom fields for YAML output (appended after charge/mass/name).
     fn format_atom_fields(&self, params: &BeadParams) -> String;
@@ -114,5 +120,23 @@ pub fn from_name(
         _ => Err(format!(
             "unknown force field model: '{name}' (available: calvados3, kimhummer/kh, pasquier, none)"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cyx_borrows_cys_params() {
+        for name in ["calvados3", "kimhummer", "pasquier"] {
+            let ff = from_name(name, HydrophobicScaling::NoScale).unwrap().unwrap();
+            let cyx = ff.params("CYX", BeadType::Residue).expect(name);
+            let cys = ff.params("CYS", BeadType::Residue).expect(name);
+            assert_eq!(cyx.mass, cys.mass, "{name}");
+            assert_eq!(cyx.sigma, cys.sigma, "{name}");
+            assert_eq!(cyx.epsilon, cys.epsilon, "{name}");
+            assert_eq!(cyx.lambda, cys.lambda, "{name}");
+        }
     }
 }

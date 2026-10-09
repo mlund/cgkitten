@@ -278,24 +278,13 @@ pub trait CoarseGrain {
     ) -> Vec<Bead>;
 }
 
-/// Look up the titratable group for a residue, returning `None` for SS-bonded CYS.
-fn titratable_group_unless_ss(
-    key: &ResidueKey,
-    res_name: &str,
-    is_ss_bonded: bool,
-) -> Option<&'static residue::TitratableGroup> {
-    if res_name == "CYS" && is_ss_bonded {
-        debug!(
-            "Skipping titration for SS-bonded CYS {}:{}",
-            key.chain_id, key.res_seq
-        );
-        return None;
-    }
-    residue::find_titratable_group(res_name)
-}
-
 /// Create a residue bead at the geometric center of the given atoms.
-fn make_residue_bead(key: &ResidueKey, atoms: &[&AtomRecord], bead_type: BeadType) -> Bead {
+fn make_residue_bead(
+    key: &ResidueKey,
+    atoms: &[&AtomRecord],
+    res_name: &str,
+    bead_type: BeadType,
+) -> Bead {
     let ((cx, cy, cz), mass) = center_and_mass(atoms).unwrap();
     Bead {
         x: cx,
@@ -303,7 +292,7 @@ fn make_residue_bead(key: &ResidueKey, atoms: &[&AtomRecord], bead_type: BeadTyp
         z: cz,
         charge: 0.0,
         mass,
-        res_name: atoms[0].res_name.clone(),
+        res_name: res_name.to_string(),
         chain_id: key.chain_id.clone(),
         res_seq: key.res_seq,
         bead_type,
@@ -320,9 +309,10 @@ impl CoarseGrain for MultiBead {
         atoms: &[&AtomRecord],
         is_ss_bonded: bool,
     ) -> Vec<Bead> {
-        let mut beads = vec![make_residue_bead(key, atoms, BeadType::Residue)];
+        let name = residue::residue_name(&atoms[0].res_name, is_ss_bonded);
+        let mut beads = vec![make_residue_bead(key, atoms, name, BeadType::Residue)];
 
-        if let Some(group) = titratable_group_unless_ss(key, &atoms[0].res_name, is_ss_bonded)
+        if let Some(group) = residue::find_titratable_group(name)
             && let Some(bead) = make_titratable_bead(key, atoms, group, BeadType::Virtual)
         {
             beads.push(bead);
@@ -342,14 +332,14 @@ impl CoarseGrain for SingleBead {
         atoms: &[&AtomRecord],
         is_ss_bonded: bool,
     ) -> Vec<Bead> {
-        let bead_type =
-            if titratable_group_unless_ss(key, &atoms[0].res_name, is_ss_bonded).is_some() {
-                BeadType::Titratable
-            } else {
-                BeadType::Residue
-            };
+        let name = residue::residue_name(&atoms[0].res_name, is_ss_bonded);
+        let bead_type = if residue::find_titratable_group(name).is_some() {
+            BeadType::Titratable
+        } else {
+            BeadType::Residue
+        };
 
-        vec![make_residue_bead(key, atoms, bead_type)]
+        vec![make_residue_bead(key, atoms, name, bead_type)]
     }
 }
 
@@ -1078,6 +1068,12 @@ ATOM 8 SG CYS A 20 5.500 1.500 0.000 S . 1
         let beads = coarse_grain(cif.as_bytes());
         assert_eq!(beads.len(), 3, "beads: {beads:#?}");
         assert!(!beads.iter().any(|b| b.bead_type == BeadType::Virtual));
+        let cys = |b: &&Bead| b.bead_type == BeadType::Residue;
+        assert!(beads.iter().filter(cys).all(|b| b.res_name == "CYX"));
+
+        let beads = coarse_grain_with(cif.as_bytes(), &SingleBead);
+        assert!(beads.iter().all(|b| b.bead_type != BeadType::Titratable));
+        assert!(beads.iter().filter(cys).all(|b| b.res_name == "CYX"));
     }
 
     #[test]
@@ -1105,6 +1101,7 @@ ATOM 4 SG CYS A 5 3.500 1.500 0.000 S . 1
         let beads = coarse_grain(cif.as_bytes());
         assert_eq!(beads.len(), 3, "beads: {beads:#?}");
         assert!(beads.iter().any(|b| b.bead_type == BeadType::Virtual));
+        assert!(!beads.iter().any(|b| b.res_name == "CYX"));
     }
 
     #[test]

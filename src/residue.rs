@@ -168,6 +168,24 @@ pub fn find_titratable_group(res_name: &str) -> Option<&'static TitratableGroup>
     TITRATABLE_GROUPS.iter().find(|g| g.res_name == res_name)
 }
 
+/// SS-bonded cysteine (Amber convention). Not titratable, so it must not share
+/// a type name with free CYS.
+const CYX: &str = "CYX";
+
+/// Bead residue name, distinguishing SS-bonded cysteines as CYX.
+pub fn residue_name(res_name: &str, is_ss_bonded: bool) -> &str {
+    if is_ss_bonded && res_name == "CYS" {
+        CYX
+    } else {
+        res_name
+    }
+}
+
+/// Residue whose parameters a variant name borrows (CYX → CYS).
+pub fn parent_residue(res_name: &str) -> &str {
+    if res_name == CYX { "CYS" } else { res_name }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +208,16 @@ mod tests {
         assert!(find_titratable_group("CYS").is_some());
         assert!(find_titratable_group("TYR").is_some());
         assert!(find_titratable_group("ALA").is_none());
+    }
+
+    #[test]
+    fn ss_bonded_cys_is_cyx() {
+        assert_eq!(residue_name("CYS", true), "CYX");
+        assert_eq!(residue_name("CYS", false), "CYS");
+        assert_eq!(residue_name("ALA", true), "ALA");
+        assert_eq!(parent_residue(residue_name("CYS", true)), "CYS");
+        assert_eq!(parent_residue("ALA"), "ALA");
+        assert!(find_titratable_group("CYX").is_none());
     }
 
     #[test]

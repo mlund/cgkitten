@@ -90,7 +90,7 @@ const EPSILON_KT: [[f64; 20]; 20] = [
 ];
 
 impl ForceField for KimHummer {
-    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
+    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
             BeadType::Residue | BeadType::Titratable => RESIDUES
                 .iter()

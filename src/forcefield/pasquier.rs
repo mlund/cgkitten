@@ -67,7 +67,7 @@ const SITE: BeadParams = BeadParams {
 };
 
 impl ForceField for Pasquier {
-    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
+    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
             BeadType::Residue | BeadType::Titratable => RESIDUES
                 .iter()

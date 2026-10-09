@@ -224,6 +224,12 @@ impl Topology {
             );
         }
 
+        // Faunus maps beads to types by name; a duplicate silently merges distinct types.
+        let mut seen = HashSet::new();
+        for t in &types {
+            assert!(seen.insert(t.name.as_str()), "duplicate atom type name '{}'", t.name);
+        }
+
         Topology { types, bead_names }
     }
 
@@ -289,6 +295,27 @@ mod tests {
         assert_eq!(topo.bead_name(0), "ALA");
         assert_eq!(topo.bead_name(1), "GLY");
         assert_eq!(topo.bead_name(2), "ALA");
+    }
+
+    #[test]
+    fn cyx_and_titratable_cys_are_distinct() {
+        let beads = vec![
+            bead("CYX", BeadType::Residue, 0.0, 103.0),
+            bead("CYS", BeadType::Titratable, -0.03, 103.0),
+        ];
+        let topo = Topology::new(&beads, 0.02);
+        assert_eq!(topo.bead_name(0), "CYX");
+        assert_eq!(topo.bead_name(1), "CYS");
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate atom type name 'CYS'")]
+    fn duplicate_type_names_rejected() {
+        let beads = vec![
+            bead("CYS", BeadType::Residue, 0.0, 103.0),
+            bead("CYS", BeadType::Titratable, -0.03, 103.0),
+        ];
+        Topology::new(&beads, 0.02);
     }
 
     #[test]
