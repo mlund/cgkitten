@@ -487,7 +487,7 @@ fn records_to_beads(
     let mut beads = Vec::new();
 
     for (key, atoms) in &residue_groups {
-        let is_ss_bonded = atoms[0].res_name == "CYS" && ss_bonded.contains(key);
+        let is_ss_bonded = residue::is_cysteine(&atoms[0].res_name) && ss_bonded.contains(key);
 
         // Delegate per-residue bead creation to the policy
         beads.extend(policy.residue_to_beads(key, atoms, is_ss_bonded));
@@ -641,7 +641,7 @@ fn find_disulfide_bonds_geometric(
 ) -> HashSet<ResidueKey> {
     let cys_sg: Vec<(&ResidueKey, f64, f64, f64)> = residue_groups
         .iter()
-        .filter(|(_, atoms)| atoms[0].res_name == "CYS")
+        .filter(|(_, atoms)| residue::is_cysteine(&atoms[0].res_name))
         .filter_map(|(key, atoms)| {
             atoms
                 .iter()
@@ -726,7 +726,7 @@ pub fn format_topology(
         } else {
             ""
         };
-        let ff_params = ff.and_then(|f| f.params(t.res_name, t.bead_type));
+        let ff_params = ff.and_then(|f| f.params(residue::parent_residue(t.res_name), t.bead_type));
         let mass = ff_params
             .and_then(|p| (p.mass > 0.0).then_some(p.mass))
             .unwrap_or(t.mass);
@@ -1074,6 +1074,35 @@ ATOM 8 SG CYS A 20 5.500 1.500 0.000 S . 1
         let beads = coarse_grain_with(cif.as_bytes(), &SingleBead);
         assert!(beads.iter().all(|b| b.bead_type != BeadType::Titratable));
         assert!(beads.iter().filter(cys).all(|b| b.res_name == "CYX"));
+    }
+
+    #[test]
+    fn input_cyx_kept_and_not_titrated() {
+        // Partner absent (e.g. other chain filtered out): trust the input label.
+        let cif = r#"
+data_test
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.auth_atom_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.type_symbol
+_atom_site.label_alt_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1 N CYX A 5 0.000 0.000 0.000 N . 1
+ATOM 2 CA CYX A 5 1.458 0.000 0.000 C . 1
+ATOM 3 CB CYX A 5 2.000 1.200 0.000 C . 1
+ATOM 4 SG CYX A 5 3.500 1.500 0.000 S . 1
+"#;
+        let beads = coarse_grain_with(cif.as_bytes(), &SingleBead);
+        let cyx: Vec<_> = beads.iter().filter(|b| b.res_name == "CYX").collect();
+        assert_eq!(cyx.len(), 1, "beads: {beads:#?}");
+        assert_eq!(cyx[0].bead_type, BeadType::Residue);
     }
 
     #[test]

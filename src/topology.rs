@@ -227,7 +227,11 @@ impl Topology {
         // Faunus maps beads to types by name; a duplicate silently merges distinct types.
         let mut seen = HashSet::new();
         for t in &types {
-            assert!(seen.insert(t.name.as_str()), "duplicate atom type name '{}'", t.name);
+            assert!(
+                seen.insert(t.name.as_str()),
+                "duplicate atom type name '{}'",
+                t.name
+            );
         }
 
         Topology { types, bead_names }

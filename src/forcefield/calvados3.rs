@@ -4,7 +4,6 @@
 
 use super::{BeadParams, ForceField, HydrophobicScaling};
 use crate::BeadType;
-use crate::residue::HYDROPHOBIC_RESIDUES;
 
 /// Calvados 3 force field with optional hydrophobic pair scaling.
 pub struct Calvados3 {
@@ -49,19 +48,21 @@ const SITE: BeadParams = BeadParams {
     sigma: 2.0,
     epsilon: 0.8368,
     lambda: 0.0,
+    residue: None,
 };
 
 impl ForceField for Calvados3 {
-    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
+    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
             BeadType::Residue | BeadType::Titratable => RESIDUES
                 .iter()
                 .find(|(name, _, _, _, _)| *name == res_name)
-                .map(|(_, mass, lambda, sigma, epsilon)| BeadParams {
+                .map(|(name, mass, lambda, sigma, epsilon)| BeadParams {
                     mass: *mass,
                     sigma: *sigma,
                     epsilon: *epsilon,
                     lambda: *lambda,
+                    residue: Some(name),
                 }),
             BeadType::Ion | BeadType::Virtual | BeadType::Ntr | BeadType::Ctr => Some(SITE),
         }
@@ -106,7 +107,7 @@ fn hydrophobic_pairs<'a>(
     }
     let hp: Vec<_> = types
         .iter()
-        .filter(|(name, _, _)| HYDROPHOBIC_RESIDUES.contains(name))
+        .filter(|(_, _, p)| p.is_hydrophobic())
         .collect();
 
     let mut pairs = Vec::new();
@@ -136,7 +137,7 @@ mod tests {
             .iter()
             .filter_map(|name| {
                 RESIDUES.iter().find(|(n, _, _, _, _)| n == name).map(
-                    |(_, mass, lambda, sigma, epsilon)| {
+                    |(n, mass, lambda, sigma, epsilon)| {
                         (
                             *name,
                             0.0,
@@ -145,6 +146,7 @@ mod tests {
                                 sigma: *sigma,
                                 epsilon: *epsilon,
                                 lambda: *lambda,
+                                residue: Some(n),
                             },
                         )
                     },

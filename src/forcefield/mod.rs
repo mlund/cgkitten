@@ -23,19 +23,23 @@ pub struct BeadParams {
     pub epsilon: f64,
     /// Hydrophobicity parameter λ (Ashbaugh-Hatch). Zero for non-AH models.
     pub lambda: f64,
+    /// Residue the parameters came from; `None` for sites. Pair lookups use this,
+    /// since type names may be variants (CYX) or charge clusters (TYR1).
+    pub residue: Option<&'static str>,
+}
+
+impl BeadParams {
+    fn is_hydrophobic(&self) -> bool {
+        self.residue
+            .is_some_and(|r| residue::HYDROPHOBIC_RESIDUES.contains(&r))
+    }
 }
 
 /// A force field model provides parameters for coarse-grained beads
 /// and generates the nonbonded YAML section.
 pub trait ForceField {
-    /// Look up parameters for a bead by residue name and type.
-    /// Variant names (e.g. CYX) resolve to their parent so models need not list them.
-    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
-        self.residue_params(residue::parent_residue(res_name), bead_type)
-    }
-
-    /// Model-specific lookup by canonical residue name. Call `params` instead.
-    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams>;
+    /// Look up parameters for a bead by standard residue name and type.
+    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams>;
 
     /// FF-specific per-atom fields for YAML output (appended after charge/mass/name).
     fn format_atom_fields(&self, params: &BeadParams) -> String;
@@ -120,23 +124,5 @@ pub fn from_name(
         _ => Err(format!(
             "unknown force field model: '{name}' (available: calvados3, kimhummer/kh, pasquier, none)"
         )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cyx_borrows_cys_params() {
-        for name in ["calvados3", "kimhummer", "pasquier"] {
-            let ff = from_name(name, HydrophobicScaling::NoScale).unwrap().unwrap();
-            let cyx = ff.params("CYX", BeadType::Residue).expect(name);
-            let cys = ff.params("CYS", BeadType::Residue).expect(name);
-            assert_eq!(cyx.mass, cys.mass, "{name}");
-            assert_eq!(cyx.sigma, cys.sigma, "{name}");
-            assert_eq!(cyx.epsilon, cys.epsilon, "{name}");
-            assert_eq!(cyx.lambda, cys.lambda, "{name}");
-        }
     }
 }

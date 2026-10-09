@@ -6,7 +6,6 @@
 
 use super::{BeadParams, ForceField, HydrophobicScaling};
 use crate::BeadType;
-use crate::residue::HYDROPHOBIC_RESIDUES;
 
 const R_KJ_PER_MOL: f64 = 8.314462618e-3; // kJ/(mol·K)
 const KT_TO_KJ_MOL: f64 = R_KJ_PER_MOL * 300.0; // T_ref = 300 K
@@ -59,6 +58,7 @@ const SITE: BeadParams = BeadParams {
     sigma: 2.0,
     epsilon: 0.1,
     lambda: 0.0,
+    residue: None,
 };
 
 /// Pre-scaled Miyazawa-Jernigan contact energies: ε_ij = λ(e_ij − e_0)
@@ -90,16 +90,17 @@ const EPSILON_KT: [[f64; 20]; 20] = [
 ];
 
 impl ForceField for KimHummer {
-    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
+    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
             BeadType::Residue | BeadType::Titratable => RESIDUES
                 .iter()
                 .find(|(name, _, _)| *name == res_name)
-                .map(|(_, mass, sigma)| BeadParams {
+                .map(|(name, mass, sigma)| BeadParams {
                     mass: *mass,
                     sigma: *sigma,
                     epsilon: 0.0,
                     lambda: 0.0,
+                    residue: Some(name),
                 }),
             BeadType::Ion | BeadType::Virtual | BeadType::Ntr | BeadType::Ctr => Some(SITE),
         }
@@ -122,10 +123,11 @@ impl ForceField for KimHummer {
         for (i, (na, qa, pa)) in types.iter().enumerate() {
             for (nb, qb, pb) in &types[i..] {
                 let sigma = (pa.sigma + pb.sigma) / 2.0;
-                let mut epsilon = pair_epsilon(na, nb);
+                let mut epsilon = pair_epsilon(pa, pb);
 
                 if let HydrophobicScaling::ScaleEpsilon(c) = &self.scaling
-                    && is_hydrophobic_pair(na, nb)
+                    && pa.is_hydrophobic()
+                    && pb.is_hydrophobic()
                 {
                     epsilon *= c;
                 }
@@ -160,18 +162,14 @@ impl ForceField for KimHummer {
 }
 
 /// Get pair epsilon in kJ/mol. Falls back to SITE epsilon for non-residue types.
-fn pair_epsilon(name_a: &str, name_b: &str) -> f64 {
+fn pair_epsilon(a: &BeadParams, b: &BeadParams) -> f64 {
     match (
-        KimHummer::residue_index(name_a),
-        KimHummer::residue_index(name_b),
+        a.residue.and_then(KimHummer::residue_index),
+        b.residue.and_then(KimHummer::residue_index),
     ) {
         (Some(i), Some(j)) => EPSILON_KT[i][j] * KT_TO_KJ_MOL,
         _ => SITE.epsilon,
     }
-}
-
-fn is_hydrophobic_pair(a: &str, b: &str) -> bool {
-    HYDROPHOBIC_RESIDUES.contains(&a) && HYDROPHOBIC_RESIDUES.contains(&b)
 }
 
 #[cfg(test)]
@@ -210,14 +208,34 @@ mod tests {
 
     #[test]
     fn epsilon_ala_ala() {
-        let eps = pair_epsilon("ALA", "ALA");
+        let kh = KimHummer::new(HydrophobicScaling::NoScale);
+        let ala = kh.params("ALA", BeadType::Residue).unwrap();
+        let eps = pair_epsilon(&ala, &ala);
         assert!((eps - (-0.07155 * KT_TO_KJ_MOL)).abs() < 1e-10);
     }
 
     #[test]
     fn epsilon_site_fallback() {
-        let eps = pair_epsilon("ALA", "O1"); // O1 is a virtual site name
+        let kh = KimHummer::new(HydrophobicScaling::NoScale);
+        let ala = kh.params("ALA", BeadType::Residue).unwrap();
+        let eps = pair_epsilon(&ala, &SITE);
         assert!((eps - SITE.epsilon).abs() < 1e-10);
+    }
+
+    #[test]
+    fn pair_epsilon_follows_residue_not_type_name() {
+        // Variant (CYX) and clustered (TYR1) type names must get the parent's MJ epsilon.
+        let kh = KimHummer::new(HydrophobicScaling::NoScale);
+        let cys = kh.params("CYS", BeadType::Residue).unwrap();
+        let tyr = kh.params("TYR", BeadType::Titratable).unwrap();
+        let yaml = kh.nonbonded_yaml(&[("CYX", 0.0, cys), ("TYR1", -0.1, tyr)]);
+        let expected = format!(
+            "[CYX, TYR1]:\n          - !KimHummer {{sigma: {}, epsilon: {:.4}}}",
+            (cys.sigma + tyr.sigma) / 2.0,
+            pair_epsilon(&cys, &tyr)
+        );
+        assert!(yaml.contains(&expected), "{yaml}");
+        assert!((pair_epsilon(&cys, &tyr) - SITE.epsilon).abs() > 1e-6);
     }
 
     #[test]

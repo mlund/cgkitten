@@ -21,9 +21,9 @@ pub const HYDROPHOBIC_RESIDUES: &[&str] = &[
     "ALA", "ILE", "LEU", "MET", "PHE", "PRO", "TRP", "TYR", "VAL",
 ];
 
-/// Returns true if residue name is a standard amino acid.
+/// Returns true if residue name is a standard amino acid or a known variant (CYX).
 pub fn is_amino_acid(res_name: &str) -> bool {
-    STANDARD_RESIDUES.contains(&res_name)
+    STANDARD_RESIDUES.contains(&parent_residue(res_name))
 }
 
 /// Known metal ions to keep as individual beads.
@@ -168,22 +168,52 @@ pub fn find_titratable_group(res_name: &str) -> Option<&'static TitratableGroup>
     TITRATABLE_GROUPS.iter().find(|g| g.res_name == res_name)
 }
 
-/// SS-bonded cysteine (Amber convention). Not titratable, so it must not share
-/// a type name with free CYS.
+const CYS: &str = "CYS";
+
+/// SS-bonded cysteine (Amber convention). Kept distinct because it's not
+/// titratable and must not share a type name with free CYS.
 const CYX: &str = "CYX";
 
-/// Bead residue name, distinguishing SS-bonded cysteines as CYX.
+/// Amber/CHARMM protonation-state labels. Charges are recomputed by titration,
+/// so the input's protonation state is dropped and the parent name is used.
+const PROTONATION_VARIANTS: &[(&str, &str)] = &[
+    ("HID", "HIS"),
+    ("HIE", "HIS"),
+    ("HIP", "HIS"),
+    ("HSD", "HIS"),
+    ("HSE", "HIS"),
+    ("HSP", "HIS"),
+    ("ASH", "ASP"),
+    ("GLH", "GLU"),
+    ("LYN", "LYS"),
+    ("ARN", "ARG"),
+    ("TYM", "TYR"),
+    ("CYM", CYS),
+];
+
+/// Standard residue a variant label stands for (CYX, HIE, ... → parent).
+pub fn parent_residue(res_name: &str) -> &str {
+    if res_name == CYX {
+        return CYS;
+    }
+    PROTONATION_VARIANTS
+        .iter()
+        .find(|(v, _)| *v == res_name)
+        .map_or(res_name, |(_, parent)| parent)
+}
+
+/// Bead residue name: protonation variants collapse to the parent; SS-bonded
+/// cysteines (detected or input-labelled) become CYX.
 pub fn residue_name(res_name: &str, is_ss_bonded: bool) -> &str {
-    if is_ss_bonded && res_name == "CYS" {
-        CYX
-    } else {
-        res_name
+    match parent_residue(res_name) {
+        CYS if is_ss_bonded || res_name == CYX => CYX,
+        parent => parent,
     }
 }
 
-/// Residue whose parameters a variant name borrows (CYX → CYS).
-pub fn parent_residue(res_name: &str) -> &str {
-    if res_name == CYX { "CYS" } else { res_name }
+/// Cysteine under any label, for disulfide detection.
+pub fn is_cysteine(res_name: &str) -> bool {
+    parent_residue(res_name) == CYS
 }
 
 #[cfg(test)]
@@ -218,6 +248,25 @@ mod tests {
         assert_eq!(parent_residue(residue_name("CYS", true)), "CYS");
         assert_eq!(parent_residue("ALA"), "ALA");
         assert!(find_titratable_group("CYX").is_none());
+    }
+
+    #[test]
+    fn input_cyx_is_cysteine() {
+        assert!(is_amino_acid("CYX"));
+        assert!(is_cysteine("CYX"));
+        assert!(is_cysteine("CYS"));
+        // Already-labelled CYX stays CYX, so it never titrates.
+        assert_eq!(residue_name("CYX", false), "CYX");
+    }
+
+    #[test]
+    fn protonation_variants_collapse_to_parent() {
+        for (variant, parent) in PROTONATION_VARIANTS {
+            assert!(is_amino_acid(variant), "{variant}");
+            assert_eq!(residue_name(variant, false), *parent);
+            assert!(find_titratable_group(residue_name(variant, false)).is_some());
+        }
+        assert_eq!(residue_name("CYM", true), "CYX");
     }
 
     #[test]

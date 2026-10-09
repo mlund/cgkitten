@@ -11,7 +11,6 @@
 
 use super::{BeadParams, ForceField, HydrophobicScaling};
 use crate::BeadType;
-use crate::residue::HYDROPHOBIC_RESIDUES;
 
 const R_KJ_PER_MOL: f64 = 8.314462618e-3;
 const T_REF: f64 = 298.15;
@@ -64,19 +63,21 @@ const SITE: BeadParams = BeadParams {
     sigma: 2.0,
     epsilon: EPSILON_OTHER_KT * KT_TO_KJ_MOL,
     lambda: 0.0,
+    residue: None,
 };
 
 impl ForceField for Pasquier {
-    fn residue_params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
+    fn params(&self, res_name: &str, bead_type: BeadType) -> Option<BeadParams> {
         match bead_type {
             BeadType::Residue | BeadType::Titratable => RESIDUES
                 .iter()
                 .find(|(name, _, _)| *name == res_name)
-                .map(|(_, mass, sigma)| BeadParams {
+                .map(|(name, mass, sigma)| BeadParams {
                     mass: *mass,
                     sigma: *sigma,
                     epsilon: 0.0,
                     lambda: 0.0,
+                    residue: Some(name),
                 }),
             BeadType::Ion | BeadType::Virtual | BeadType::Ntr | BeadType::Ctr => Some(SITE),
         }
@@ -96,7 +97,7 @@ impl ForceField for Pasquier {
         for (i, (na, qa, pa)) in types.iter().enumerate() {
             for (nb, qb, pb) in &types[i..] {
                 let sigma = (pa.sigma + pb.sigma) / 2.0;
-                let is_hh = is_hydrophobic(na) && is_hydrophobic(nb);
+                let is_hh = pa.is_hydrophobic() && pb.is_hydrophobic();
 
                 let mut epsilon_kt = if is_hh {
                     EPSILON_HH_KT
@@ -140,10 +141,6 @@ impl ForceField for Pasquier {
     }
 }
 
-fn is_hydrophobic(name: &str) -> bool {
-    HYDROPHOBIC_RESIDUES.contains(&name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +163,16 @@ mod tests {
         let yaml = ff.nonbonded_yaml(&types);
         let expected = EPSILON_HH_KT * KT_TO_KJ_MOL;
         assert!(yaml.contains(&format!("{expected:.4}")));
+    }
+
+    #[test]
+    fn clustered_hydrophobic_name_still_hydrophobic() {
+        // Titratable TYR clusters are named TYR1, TYR2, ...
+        let ff = Pasquier::new(HydrophobicScaling::NoScale);
+        let tyr = ff.params("TYR", BeadType::Titratable).unwrap();
+        let yaml = ff.nonbonded_yaml(&[("TYR1", -0.1, tyr)]);
+        let expected = EPSILON_HH_KT * KT_TO_KJ_MOL;
+        assert!(yaml.contains(&format!("{expected:.4}")), "{yaml}");
     }
 
     #[test]
