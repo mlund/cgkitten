@@ -368,10 +368,7 @@ fn read_atom_site_data<R: BufRead>(
         }
 
         while row.len() < num_cols {
-            match tokenizer.next_token() {
-                Some(tok) => row.push(tok),
-                None => return None,
-            }
+            row.push(tokenizer.next_token()?);
         }
 
         let model_id = get_value(&row, field_map, AtomField::ModelNum, None);
@@ -387,10 +384,7 @@ fn read_atom_site_data<R: BufRead>(
         }
 
         row.clear();
-        match tokenizer.next_token() {
-            Some(tok) => row.push(tok),
-            None => return None,
-        }
+        row.push(tokenizer.next_token()?);
     }
 }
 
@@ -463,10 +457,7 @@ fn read_struct_conn_data<R: BufRead>(
         }
 
         while row.len() < num_cols {
-            match tokenizer.next_token() {
-                Some(tok) => row.push(tok),
-                None => return None,
-            }
+            row.push(tokenizer.next_token()?);
         }
 
         if let Some(bond) = parse_disulfide_row(&row, field_map) {
@@ -474,10 +465,7 @@ fn read_struct_conn_data<R: BufRead>(
         }
 
         row.clear();
-        match tokenizer.next_token() {
-            Some(tok) => row.push(tok),
-            None => return None,
-        }
+        row.push(tokenizer.next_token()?);
     }
 }
 

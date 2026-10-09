@@ -195,7 +195,7 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> io::Result
             "ATOM",
             i + 1,
             atom_name,
-            &names[i],
+            names[i],
             b.chain_id,
             b.res_seq,
             b.x,
