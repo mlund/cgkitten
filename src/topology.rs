@@ -69,7 +69,7 @@ fn cluster_charges(entries: &mut [(usize, f64)], tolerance: f64) -> Vec<Range<us
     if entries.is_empty() {
         return Vec::new();
     }
-    entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    entries.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut clusters = Vec::new();
     let mut start = 0;
@@ -118,11 +118,13 @@ impl Topology {
         let mut types: Vec<AtomType> = Vec::new();
         let mut bead_names: Vec<String> = vec![String::new(); beads.len()];
 
+        // Faunus maps beads to types by name, so every type name must be unique.
+        let mut used: HashSet<String> = HashSet::new();
+
         // Phase 1: handle non-titratable beads (Residue, Ion) — deduplicate by res_name.
-        let mut seen_non_tit: HashSet<String> = HashSet::new();
         for (i, b) in beads.iter().enumerate() {
             if b.bead_type == BeadType::Residue || b.bead_type == BeadType::Ion {
-                if seen_non_tit.insert(b.res_name.clone()) {
+                if used.insert(b.res_name.clone()) {
                     types.push(AtomType {
                         name: b.res_name.clone(),
                         charge: b.charge,
@@ -161,40 +163,47 @@ impl Topology {
             }
         }
 
-        // Sort group keys for deterministic output order.
-        let mut keys: Vec<GroupKey> = groups.keys().cloned().collect();
-        keys.sort_by(|a, b| {
+        // Sort groups for deterministic output order.
+        let mut groups: Vec<(GroupKey, GroupData)> = groups.into_iter().collect();
+        groups.sort_by(|(a, _), (b, _)| {
             a.base_name()
                 .cmp(b.base_name())
                 .then(a.mass_bits().cmp(&b.mass_bits()))
         });
 
         // Two-pass: first count total clusters per base name, then assign names.
-        let mut base_name_clusters: HashMap<&str, usize> = HashMap::new();
-        let mut key_clusters: Vec<(&GroupKey, Vec<Range<usize>>)> = Vec::new();
-
-        for key in &keys {
-            let group = groups.get_mut(key).unwrap();
-            let clusters = cluster_charges(&mut group.entries, tolerance);
-            *base_name_clusters.entry(key.base_name()).or_insert(0) += clusters.len();
-            key_clusters.push((key, clusters));
-        }
+        let mut base_name_clusters: HashMap<String, usize> = HashMap::new();
+        let clustered: Vec<(GroupData, Vec<Range<usize>>)> = groups
+            .into_iter()
+            .map(|(key, mut group)| {
+                let clusters = cluster_charges(&mut group.entries, tolerance);
+                *base_name_clusters
+                    .entry(key.base_name().to_string())
+                    .or_insert(0) += clusters.len();
+                (group, clusters)
+            })
+            .collect();
 
         // Assign names and create types.
         let mut counters: HashMap<&str, usize> = HashMap::new();
-        for (key, clusters) in &key_clusters {
-            let group = groups.get(key).unwrap();
-            let total_clusters = base_name_clusters[group.res_name.as_str()];
+        for (group, clusters) in &clustered {
+            let total_clusters = base_name_clusters[&group.res_name];
 
             for range in clusters {
                 let counter = counters.entry(group.res_name.as_str()).or_insert(0);
-                *counter += 1;
-
-                let name = if total_clusters == 1 {
+                let name = if total_clusters == 1 && !used.contains(&group.res_name) {
                     group.res_name.clone()
                 } else {
-                    format!("{}{}", group.res_name, counter)
+                    // Number it, skipping names already taken (e.g. a non-titratable twin).
+                    loop {
+                        *counter += 1;
+                        let candidate = format!("{}{}", group.res_name, counter);
+                        if !used.contains(&candidate) {
+                            break candidate;
+                        }
+                    }
                 };
+                used.insert(name.clone());
 
                 // Mean charge for this cluster.
                 let charge_sum: f64 = group.entries[range.clone()].iter().map(|(_, q)| q).sum();
@@ -221,16 +230,6 @@ impl Topology {
             info!(
                 "Merged {n_before} titratable sites into {n_after} unique types (tolerance {:.0}%)",
                 tolerance * 100.0
-            );
-        }
-
-        // Faunus maps beads to types by name; a duplicate silently merges distinct types.
-        let mut seen = HashSet::new();
-        for t in &types {
-            assert!(
-                seen.insert(t.name.as_str()),
-                "duplicate atom type name '{}'",
-                t.name
             );
         }
 
@@ -313,13 +312,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "duplicate atom type name 'CYS'")]
-    fn duplicate_type_names_rejected() {
+    fn titratable_name_never_shadows_non_titratable() {
         let beads = vec![
             bead("CYS", BeadType::Residue, 0.0, 103.0),
             bead("CYS", BeadType::Titratable, -0.03, 103.0),
+            bead("O1", BeadType::Residue, 0.0, 16.0),
+            bead("O", BeadType::Virtual, -0.9, 0.0),
+            bead("O", BeadType::Virtual, -0.1, 0.0),
         ];
-        Topology::new(&beads, 0.02);
+        let topo = Topology::new(&beads, 0.02);
+        let names: Vec<&str> = topo.bead_names().iter().map(String::as_str).collect();
+        assert_eq!(names[..3], ["CYS", "CYS1", "O1"]);
+        // Virtual clusters skip the taken "O1".
+        let mut virt = names[3..].to_vec();
+        virt.sort();
+        assert_eq!(virt, ["O2", "O3"]);
     }
 
     #[test]

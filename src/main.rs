@@ -10,8 +10,9 @@ use rgb::RGB8;
 use textplots::{Chart, ColorPlot, Shape};
 
 use cgkitten::{
-    Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, coarse_grain_pdb_with,
-    coarse_grain_with, filter_chains, format_topology, format_xyz, topology::Topology,
+    Bead, ChargeCalc, ChargeResult, MultiBead, SingleBead, check_names_match,
+    coarse_grain_pdb_with, coarse_grain_with, filter_chains, format_topology, format_xyz,
+    topology::Topology,
 };
 
 /// Convert mmCIF protein structures to coarse-grained representation.
@@ -169,8 +170,8 @@ fn cg_policy(p: &CgPolicy) -> &'static dyn cgkitten::CoarseGrain {
 }
 
 /// Format beads as PQR file.
-fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
-    debug_assert_eq!(beads.len(), names.len(), "beads and names must be 1:1");
+fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> io::Result<String> {
+    check_names_match(beads, names).map_err(invalid_input)?;
     use cgkitten::BeadType;
     let mut out = String::new();
     writeln!(
@@ -206,19 +207,24 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> String {
         .expect("writing to String is infallible");
     }
     writeln!(out, "END").expect("writing to String is infallible");
-    out
+    Ok(out)
+}
+
+fn invalid_input(msg: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, msg)
 }
 
 /// Generate pH steps over [ph_start, ph_end].
-fn ph_steps(ph_start: f64, ph_end: f64, ph_step: f64) -> Vec<f64> {
-    assert!(
-        ph_step > 0.0 && ph_start <= ph_end,
-        "ph_step must be positive and ph_start ≤ ph_end"
-    );
+fn ph_steps(ph_start: f64, ph_end: f64, ph_step: f64) -> io::Result<Vec<f64>> {
+    if !(ph_step > 0.0 && ph_start <= ph_end) {
+        return Err(invalid_input(format!(
+            "pH step must be positive and start ≤ end (got {ph_start}..{ph_end} step {ph_step})"
+        )));
+    }
     let n = ((ph_end - ph_start) / ph_step).round() as usize + 1;
-    (0..n)
+    Ok((0..n)
         .map(|i| (i as f64).mul_add(ph_step, ph_start))
-        .collect()
+        .collect())
 }
 
 fn print_logo() {
@@ -316,9 +322,9 @@ fn run_convert(
     if let Some(path) = output {
         // Explicit output: write only the requested format.
         let text = if path.extension().is_some_and(|e| e == "xyz") {
-            format_xyz(&charged, names, &cmdline)
+            format_xyz(&charged, names, &cmdline).map_err(invalid_input)?
         } else {
-            format_pqr(&charged, names, &calc)
+            format_pqr(&charged, names, &calc)?
         };
         let mut file = File::create(&path)?;
         file.write_all(text.as_bytes())?;
@@ -328,9 +334,9 @@ fn run_convert(
         for ext in ["pqr", "xyz"] {
             let path = default_output(&common.input, ext);
             let text = if ext == "xyz" {
-                format_xyz(&charged, names, &cmdline)
+                format_xyz(&charged, names, &cmdline).map_err(invalid_input)?
             } else {
-                format_pqr(&charged, names, &calc)
+                format_pqr(&charged, names, &calc)?
             };
             let mut file = File::create(&path)?;
             file.write_all(text.as_bytes())?;
@@ -366,7 +372,7 @@ fn run_scan(
         .ionic_strength(common.ionic_strength)
         .mc(common.mc);
     base_calc.log_conditions();
-    let ph_values = ph_steps(ph_start, ph_end, ph_step);
+    let ph_values = ph_steps(ph_start, ph_end, ph_step)?;
 
     // HH scan (always Henderson-Hasselbalch, ignoring mc setting)
     let hh_data: Vec<(f64, ChargeResult)> = ph_values
@@ -489,5 +495,17 @@ fn main() -> io::Result<()> {
             ph_step,
             output,
         } => run_scan(common, policy, ph_start, ph_end, ph_step, output),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ph_steps_rejects_bad_range() {
+        assert_eq!(ph_steps(3.0, 4.0, 0.5).unwrap(), [3.0, 3.5, 4.0]);
+        assert!(ph_steps(5.0, 4.0, 0.5).is_err());
+        assert!(ph_steps(3.0, 4.0, 0.0).is_err());
     }
 }

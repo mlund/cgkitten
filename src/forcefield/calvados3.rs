@@ -102,9 +102,11 @@ fn hydrophobic_pairs<'a>(
     types: &[(&'a str, f64, BeadParams)],
     scaling: &HydrophobicScaling,
 ) -> Vec<(&'a str, &'a str, f64, f64, f64)> {
-    if *scaling == HydrophobicScaling::NoScale {
-        return Vec::new();
-    }
+    let (lambda_scale, epsilon_scale) = match *scaling {
+        HydrophobicScaling::NoScale => return Vec::new(),
+        HydrophobicScaling::ScaleLambda(c) => (c, 1.0),
+        HydrophobicScaling::ScaleEpsilon(c) => (1.0, c),
+    };
     let hp: Vec<_> = types
         .iter()
         .filter(|(_, _, p)| p.is_hydrophobic())
@@ -114,14 +116,8 @@ fn hydrophobic_pairs<'a>(
     for (i, (na, _, pa)) in hp.iter().enumerate() {
         for (nb, _, pb) in &hp[i..] {
             let sigma = (pa.sigma + pb.sigma) / 2.0;
-            let mut epsilon = (pa.epsilon * pb.epsilon).sqrt();
-            let mut lambda = (pa.lambda + pb.lambda) / 2.0;
-
-            match scaling {
-                HydrophobicScaling::ScaleLambda(c) => lambda *= c,
-                HydrophobicScaling::ScaleEpsilon(c) => epsilon *= c,
-                HydrophobicScaling::NoScale => unreachable!(),
-            }
+            let epsilon = (pa.epsilon * pb.epsilon).sqrt() * epsilon_scale;
+            let lambda = (pa.lambda + pb.lambda) / 2.0 * lambda_scale;
             pairs.push((*na, *nb, sigma, epsilon, lambda));
         }
     }
