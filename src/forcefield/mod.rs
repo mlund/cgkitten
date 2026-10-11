@@ -44,7 +44,7 @@ pub trait ForceField {
     /// FF-specific per-atom fields for YAML output (appended after charge/mass/name).
     fn format_atom_fields(&self, params: &BeadParams) -> String;
 
-    /// Complete `\nsystem:\n  energy:\n    nonbonded:\n...` YAML block.
+    /// Complete `\nsystem:\n  energy:\n    - !Nonbonded\n...` YAML block.
     /// `types` provides (name, charge, params) for each atom type in the system.
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String;
 }
