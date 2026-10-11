@@ -76,7 +76,7 @@ impl ForceField for Calvados3 {
     }
 
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String {
-        let mut yaml = "\nsystem:\n  energy:\n    nonbonded:\n      \
+        let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n      \
             # A Coulomb term is automatically added\n      \
             default:\n        - !AshbaughHatch {mixing: arithmetic, cutoff: 20.0}\n"
             .to_string();

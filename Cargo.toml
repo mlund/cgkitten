@@ -1,6 +1,6 @@
 [package]
 name = "cgkitten"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Convert mmCIF/PDB protein structures to coarse-grained representation with Monte Carlo titration"
 authors = ["Mikael Lund <lyssky@icloud.com>"]
@@ -32,3 +32,7 @@ rayon = { version = "1", optional = true }
 rgb = { version = "0.8", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 textplots = { version = "0.8", optional = true }
+
+[dev-dependencies]
+# Schema guard: generated topology YAML must parse in faunus (tests/faunus_schema.rs).
+faunus = { git = "https://github.com/mlund/faunus-rs.git", default-features = false }

@@ -113,7 +113,7 @@ impl ForceField for KimHummer {
     }
 
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String {
-        let mut yaml = "\nsystem:\n  energy:\n    nonbonded:\n".to_string();
+        let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n".to_string();
 
         // Neutral pairs go under `replace:` to skip redundant Coulomb(0×0) evaluation.
         // Charged pairs go under `append:` to inherit Coulomb from the input's default.

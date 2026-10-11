@@ -88,7 +88,7 @@ impl ForceField for Pasquier {
     }
 
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String {
-        let mut yaml = "\nsystem:\n  energy:\n    nonbonded:\n".to_string();
+        let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n".to_string();
 
         // Neutral pairs → replace (skip redundant Coulomb), charged → append (inherit Coulomb)
         let mut replace_pairs = Vec::new();
