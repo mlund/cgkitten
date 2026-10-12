@@ -1,7 +1,4 @@
-//! Charge calculation using the Henderson-Hasselbalch equation.
-//!
-//! Provides a [`ChargeCalculator`] trait for extensibility, with a default
-//! implementation using Henderson-Hasselbalch.
+//! Solution conditions and Henderson-Hasselbalch site charges.
 
 use crate::residue::{PkaOverrides, TitratableGroup};
 
@@ -21,6 +18,21 @@ impl Conditions {
     /// Henderson-Hasselbalch deprotonated fraction of `group`, honouring overrides.
     pub fn fraction_deprotonated(&self, group: &TitratableGroup) -> f64 {
         1.0 / (1.0 + 10_f64.powf(self.pka_overrides.effective(group) - self.ph))
+    }
+
+    /// Henderson-Hasselbalch mean charge of `group`.
+    pub fn mean_charge(&self, group: &TitratableGroup) -> f64 {
+        let f = self.fraction_deprotonated(group);
+        f.mul_add(
+            group.charge_deprotonated - group.charge_protonated,
+            group.charge_protonated,
+        )
+    }
+
+    /// Henderson-Hasselbalch charge variance of `group`, (Δq)² f(1−f).
+    pub fn charge_variance(&self, group: &TitratableGroup) -> f64 {
+        let f = self.fraction_deprotonated(group);
+        (group.charge_deprotonated - group.charge_protonated).powi(2) * f * (1.0 - f)
     }
 }
 
@@ -46,27 +58,6 @@ impl From<&crate::ChargeCalc> for Conditions {
     }
 }
 
-/// Trait for computing the charge of a titratable group under given conditions.
-pub trait ChargeCalculator {
-    fn charge(&self, group: &TitratableGroup, conditions: &Conditions) -> f64;
-}
-
-/// Henderson-Hasselbalch charge calculator.
-///
-/// For an acid HA <-> H+ + A-:
-///   fraction_deprotonated = 1 / (1 + 10^(pKa - pH))
-///   charge = f_deprot * q_deprot + (1 - f_deprot) * q_prot
-#[derive(Clone, Debug, Default)]
-pub struct HendersonHasselbalch;
-
-impl ChargeCalculator for HendersonHasselbalch {
-    fn charge(&self, group: &TitratableGroup, conditions: &Conditions) -> f64 {
-        let fraction_deprotonated = conditions.fraction_deprotonated(group);
-        fraction_deprotonated * group.charge_deprotonated
-            + (1.0 - fraction_deprotonated) * group.charge_protonated
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,9 +72,8 @@ mod tests {
 
     #[test]
     fn at_pka_charge_is_halfway() {
-        let hh = HendersonHasselbalch;
         for group in TITRATABLE_GROUPS {
-            let charge = hh.charge(group, &conditions_at_ph(group.pka));
+            let charge = conditions_at_ph(group.pka).mean_charge(group);
             let expected = (group.charge_protonated + group.charge_deprotonated) / 2.0;
             assert!(
                 (charge - expected).abs() < 1e-10,
@@ -95,31 +85,29 @@ mod tests {
 
     #[test]
     fn pka_override_shifts_charge() {
-        let hh = HendersonHasselbalch;
         let his = crate::residue::find_titratable_group("HIS").unwrap();
         let mut conditions = conditions_at_ph(7.0);
-        let default = hh.charge(his, &conditions);
+        let default = conditions.mean_charge(his);
         conditions.pka_overrides.insert("HIS", 7.0).unwrap();
-        assert!((hh.charge(his, &conditions) - 0.5).abs() < 1e-10);
+        assert!((conditions.mean_charge(his) - 0.5).abs() < 1e-10);
         assert!(default < 0.5);
         // Overrides for other groups leave HIS untouched
         conditions.pka_overrides = PkaOverrides::default();
         conditions.pka_overrides.insert("LYS", 5.0).unwrap();
-        assert_eq!(hh.charge(his, &conditions), default);
+        assert_eq!(conditions.mean_charge(his), default);
     }
 
     #[test]
     fn asp_charges_at_extremes() {
-        let hh = HendersonHasselbalch;
         let asp = TITRATABLE_GROUPS
             .iter()
             .find(|g| g.res_name == "ASP")
             .unwrap();
 
-        let charge_low = hh.charge(asp, &conditions_at_ph(1.0));
+        let charge_low = conditions_at_ph(1.0).mean_charge(asp);
         assert!(charge_low.abs() < 0.01, "ASP at pH 1: {charge_low}");
 
-        let charge_high = hh.charge(asp, &conditions_at_ph(10.0));
+        let charge_high = conditions_at_ph(10.0).mean_charge(asp);
         assert!(
             (charge_high + 1.0).abs() < 0.01,
             "ASP at pH 10: {charge_high}"
@@ -128,16 +116,15 @@ mod tests {
 
     #[test]
     fn lys_charges_at_extremes() {
-        let hh = HendersonHasselbalch;
         let lys = TITRATABLE_GROUPS
             .iter()
             .find(|g| g.res_name == "LYS")
             .unwrap();
 
-        let charge = hh.charge(lys, &conditions_at_ph(7.0));
+        let charge = conditions_at_ph(7.0).mean_charge(lys);
         assert!((charge - 1.0).abs() < 0.01, "LYS at pH 7: {charge}");
 
-        let charge_high = hh.charge(lys, &conditions_at_ph(14.0));
+        let charge_high = conditions_at_ph(14.0).mean_charge(lys);
         assert!(charge_high.abs() < 0.01, "LYS at pH 14: {charge_high}");
     }
 }

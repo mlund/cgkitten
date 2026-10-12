@@ -6,6 +6,32 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Quadrupole moment ⟨‖Θ‖⟩ (traceless, Buckingham, Frobenius norm, as in
+  Faunus) in `Multipole`, with `capacitance()`, `dipole_std()` and
+  `quadrupole_std()`.
+- Per-bead charge variance (`ChargeResult::charge_variance`) and optional
+  charge snapshots (`ChargeCalc::snapshots`) for visualising fluctuations.
+- `coarse_grain_bytes` detects PDB vs mmCIF from content; `VERSION` constant.
+- `ChargeCalc::start` returns a seeded, resumable `Titration`, so
+  single-threaded callers (wasm) can run MC in chunks with progress.
+
+### Changed
+
+- **Breaking:** dipole and quadrupole are taken about the centre of mass; the
+  dipole was previously about the file origin, which is arbitrary for a
+  charged molecule.
+- **Breaking:** Henderson-Hasselbalch ⟨Z²⟩ and ⟨μ²⟩ now include the
+  independent-site fluctuations, so the HH capacitance is no longer zero.
+- **Breaking (library):** `ChargeCalculator` and `HendersonHasselbalch` are
+  removed; `ChargeCalc` is the single entry point.
+
+### Fixed
+
+- MC titration no longer zeroes fixed charges (e.g. Zn²⁺) in per-bead output,
+  net charge and dipole.
+
 ## [0.3.0] - 2026-10-12
 
 ### Changed

@@ -16,6 +16,7 @@ use rand::Rng;
 
 use crate::Bead;
 use crate::charge::Conditions;
+use crate::moments::{Moments, center_of_mass};
 
 const LN_10: f64 = std::f64::consts::LN_10;
 
@@ -72,6 +73,8 @@ pub(crate) struct TitratableSite {
 pub(crate) struct TitrationResult {
     /// Average charge per bead (same indexing as input beads).
     pub charges: Vec<f64>,
+    /// Per-bead charge variance ⟨q²⟩ − ⟨q⟩² (zero for fixed charges).
+    pub charge_variance: Vec<f64>,
     /// Ensemble-averaged net charge ⟨Z⟩.
     pub mean_charge: f64,
     /// Ensemble-averaged ⟨Z²⟩.
@@ -80,6 +83,50 @@ pub(crate) struct TitrationResult {
     pub mean_dipole: f64,
     /// Ensemble-averaged ⟨μ²⟩ in (e·Å)².
     pub mean_dipole_sq: f64,
+    /// Ensemble-averaged ‖Θ‖ in e·Å².
+    pub mean_quadrupole: f64,
+    /// Ensemble-averaged ‖Θ‖² in (e·Å²)².
+    pub mean_quadrupole_sq: f64,
+    /// Evenly spaced per-bead charge configurations.
+    pub snapshots: Vec<Vec<f64>>,
+}
+
+/// Ensemble accumulators, kept apart from the engine so sampling can be split
+/// over many calls (e.g. one chunk per UI frame).
+pub(crate) struct Sampler {
+    samples: usize,
+    site_sum: Vec<f64>,
+    site_sq_sum: Vec<f64>,
+    charge_sum: f64,
+    charge_sq_sum: f64,
+    dipole_sum: f64,
+    dipole_sq_sum: f64,
+    quadrupole_sum: f64,
+    quadrupole_sq_sum: f64,
+    /// Site charges, every `snapshot_every` samples.
+    snapshots: Vec<Vec<f64>>,
+    snapshot_every: usize,
+    max_snapshots: usize,
+}
+
+impl Sampler {
+    /// Spread `max_snapshots` evenly over `total_sweeps`.
+    pub fn new(num_sites: usize, total_sweeps: usize, max_snapshots: usize) -> Self {
+        Self {
+            samples: 0,
+            site_sum: vec![0.0; num_sites],
+            site_sq_sum: vec![0.0; num_sites],
+            charge_sum: 0.0,
+            charge_sq_sum: 0.0,
+            dipole_sum: 0.0,
+            dipole_sq_sum: 0.0,
+            quadrupole_sum: 0.0,
+            quadrupole_sq_sum: 0.0,
+            snapshots: Vec::with_capacity(max_snapshots),
+            snapshot_every: (total_sweeps / max_snapshots.max(1)).max(1),
+            max_snapshots,
+        }
+    }
 }
 
 /// Metropolis Monte Carlo titration engine.
@@ -103,14 +150,11 @@ pub(crate) struct TitrationMC {
     #[cfg(test)]
     phi_fixed: Vec<f64>,
     lambda_b: f64,
-    /// Running net charge (updated incrementally on accepted moves).
-    z: f64,
-    /// Running dipole moment components (updated incrementally).
-    mx: f64,
-    my: f64,
-    mz: f64,
-    /// Total number of beads in the original input (for result mapping).
-    n_beads: usize,
+    /// Running moments about the centre of mass, fixed charges included.
+    moments: Moments,
+    /// Per-bead charges with titratable sites zeroed; fixed charges (ions) survive
+    /// into results and snapshots.
+    background: Vec<f64>,
 }
 
 impl TitrationMC {
@@ -132,6 +176,7 @@ impl TitrationMC {
         let mut sites = Vec::new();
         let mut charges = Vec::new();
         let mut positions = Vec::new();
+        let com = center_of_mass(beads);
 
         for (i, b) in beads.iter().enumerate() {
             if let Some(group) = crate::titratable_group_for_bead(b, &rn) {
@@ -143,7 +188,7 @@ impl TitrationMC {
                 } else {
                     group.charge_deprotonated
                 });
-                positions.push([b.x, b.y, b.z]);
+                positions.push([b.x - com[0], b.y - com[1], b.z - com[2]]);
                 sites.push(TitratableSite {
                     bead_index: i,
                     is_protonated,
@@ -174,9 +219,9 @@ impl TitrationMC {
                         .enumerate()
                         .filter(|(j, b)| !titratable_indices.contains(j) && b.charge != 0.0)
                         .map(|(_, b)| {
-                            let dx = pos_i[0] - b.x;
-                            let dy = pos_i[1] - b.y;
-                            let dz = pos_i[2] - b.z;
+                            let dx = pos_i[0] - (b.x - com[0]);
+                            let dy = pos_i[1] - (b.y - com[1]);
+                            let dz = pos_i[2] - (b.z - com[2]);
                             let r = dz.mul_add(dz, dx.mul_add(dx, dy * dy)).sqrt();
                             if r > 0.0 {
                                 b.charge * (-r * inv_debye).exp() / r
@@ -222,16 +267,28 @@ impl TitrationMC {
             })
             .collect();
 
-        // Initial running multipole from current charges
-        let mut z = 0.0;
-        let (mut mx, mut my, mut mz_val) = (0.0, 0.0, 0.0);
-        for (i, &q) in charges.iter().enumerate() {
-            z += q;
-            let [x, y, zz] = positions[i];
-            mx += q * x;
-            my += q * y;
-            mz_val += q * zz;
-        }
+        let background: Vec<f64> = beads
+            .iter()
+            .enumerate()
+            .map(|(j, b)| {
+                if titratable_indices.contains(&j) {
+                    0.0
+                } else {
+                    b.charge
+                }
+            })
+            .collect();
+        let fixed_positions: Vec<[f64; 3]> = beads
+            .iter()
+            .map(|b| [b.x - com[0], b.y - com[1], b.z - com[2]])
+            .collect();
+        let moments = Moments::from_charges(
+            background
+                .iter()
+                .copied()
+                .zip(&fixed_positions)
+                .chain(charges.iter().copied().zip(&positions)),
+        );
 
         Self {
             charges,
@@ -242,11 +299,8 @@ impl TitrationMC {
             phi_fixed,
             phi,
             lambda_b,
-            z,
-            mx,
-            my,
-            mz: mz_val,
-            n_beads: beads.len(),
+            moments,
+            background,
         }
     }
 
@@ -312,12 +366,7 @@ impl TitrationMC {
                 self.sites[site_idx].is_protonated = !self.sites[site_idx].is_protonated;
                 accepted += 1;
 
-                // Incrementally update running multipole
-                self.z += dq;
-                let [x, y, zz] = self.positions[site_idx];
-                self.mx += dq * x;
-                self.my += dq * y;
-                self.mz += dq * zz;
+                self.moments.add(dq, &self.positions[site_idx]);
 
                 // Update all φ_j incrementally: O(n_sites) instead of O(n_sites²) full recompute.
                 // Diagonal kernel[i][i] = 0, so the self-potential stays correct without branching.
@@ -332,48 +381,75 @@ impl TitrationMC {
         accepted
     }
 
-    /// Run MC titration and return ensemble-averaged results.
-    ///
-    /// Performs `sweeps` sweeps (each sweep = one trial move per titratable site),
-    /// collecting per-site charge averages, ⟨Z⟩, and ⟨μ⟩ from every sweep.
-    pub fn run<R: Rng>(&mut self, sweeps: usize, rng: &mut R) -> TitrationResult {
-        let ns = self.sites.len();
-        let mut site_sum = vec![0.0; ns];
-        let mut charge_sum = 0.0;
-        let mut charge_sq_sum = 0.0;
-        let mut dipole_sum = 0.0;
-        let mut dipole_sq_sum = 0.0;
+    /// Record the current state.
+    pub fn sample(&self, s: &mut Sampler) {
+        for ((sum, sq), &q) in s
+            .site_sum
+            .iter_mut()
+            .zip(&mut s.site_sq_sum)
+            .zip(&self.charges)
+        {
+            *sum += q;
+            *sq += q * q;
+        }
+        let z = self.moments.z;
+        s.charge_sum += z;
+        s.charge_sq_sum += z * z;
+        let mu_sq = self.moments.dipole_sq();
+        s.dipole_sum += mu_sq.sqrt();
+        s.dipole_sq_sum += mu_sq;
+        let theta_sq = self.moments.quadrupole_sq();
+        s.quadrupole_sum += theta_sq.sqrt();
+        s.quadrupole_sq_sum += theta_sq;
+        s.samples += 1;
+        if s.samples.is_multiple_of(s.snapshot_every) && s.snapshots.len() < s.max_snapshots {
+            s.snapshots.push(self.charges.clone());
+        }
+    }
 
+    /// Ensemble averages, mapped back to bead indexing.
+    pub fn result(&self, s: &Sampler) -> TitrationResult {
+        let n = s.samples.max(1) as f64;
+        let to_beads = |site_values: &[f64]| {
+            let mut v = self.background.clone();
+            for (site, &x) in self.sites.iter().zip(site_values) {
+                v[site.bead_index] = x;
+            }
+            v
+        };
+        let means: Vec<f64> = s.site_sum.iter().map(|x| x / n).collect();
+        let variances: Vec<f64> = s
+            .site_sq_sum
+            .iter()
+            .zip(&means)
+            .map(|(sq, m)| (sq / n - m * m).max(0.0))
+            .collect();
+        let mut charge_variance = vec![0.0; self.background.len()];
+        for (site, &v) in self.sites.iter().zip(&variances) {
+            charge_variance[site.bead_index] = v;
+        }
+        TitrationResult {
+            charges: to_beads(&means),
+            charge_variance,
+            mean_charge: s.charge_sum / n,
+            mean_charge_sq: s.charge_sq_sum / n,
+            mean_dipole: s.dipole_sum / n,
+            mean_dipole_sq: s.dipole_sq_sum / n,
+            mean_quadrupole: s.quadrupole_sum / n,
+            mean_quadrupole_sq: s.quadrupole_sq_sum / n,
+            snapshots: s.snapshots.iter().map(|c| to_beads(c)).collect(),
+        }
+    }
+
+    /// Run `sweeps` sweeps, sampling after each, and return ensemble averages.
+    #[cfg(test)]
+    pub fn run<R: Rng>(&mut self, sweeps: usize, rng: &mut R) -> TitrationResult {
+        let mut sampler = Sampler::new(self.num_sites(), sweeps, 0);
         for _ in 0..sweeps {
             self.sweep(rng);
-
-            // Sample running multipole (updated incrementally in sweep)
-            for (i, &q) in self.charges.iter().enumerate() {
-                site_sum[i] += q;
-            }
-            charge_sum += self.z;
-            charge_sq_sum += self.z * self.z;
-            let mu_sq = self
-                .mz
-                .mul_add(self.mz, self.mx.mul_add(self.mx, self.my * self.my));
-            dipole_sum += mu_sq.sqrt();
-            dipole_sq_sum += mu_sq;
+            self.sample(&mut sampler);
         }
-
-        // Map site-averaged charges back to full bead array
-        let mut charges = vec![0.0; self.n_beads];
-        for (si, site) in self.sites.iter().enumerate() {
-            charges[site.bead_index] = site_sum[si] / sweeps as f64;
-        }
-
-        let s = sweeps as f64;
-        TitrationResult {
-            charges,
-            mean_charge: charge_sum / s,
-            mean_charge_sq: charge_sq_sum / s,
-            mean_dipole: dipole_sum / s,
-            mean_dipole_sq: dipole_sq_sum / s,
-        }
+        self.result(&sampler)
     }
 }
 
@@ -494,7 +570,6 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
 
     #[test]
     fn mc_without_electrostatics_matches_hh() {
-        use crate::charge::{ChargeCalculator, HendersonHasselbalch};
         use crate::residue::TITRATABLE_GROUPS;
 
         let ph = 7.0;
@@ -504,7 +579,6 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
             ..Default::default()
         };
         conditions.pka_overrides.insert("HIS", ph).unwrap();
-        let hh = HendersonHasselbalch;
 
         let mut beads = Vec::new();
         for (i, group) in TITRATABLE_GROUPS.iter().enumerate() {
@@ -524,7 +598,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
                 x,
                 y: 10.0,
                 z: 0.0,
-                charge: hh.charge(group, &conditions),
+                charge: conditions.mean_charge(group),
                 res_name: group.element.to_string(),
                 chain_id: "A".into(),
                 res_seq: (i + 1) as i32,
@@ -540,11 +614,20 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
         let result = mc.run(50000, &mut rng);
 
         for (i, group) in TITRATABLE_GROUPS.iter().enumerate() {
-            let hh_charge = hh.charge(group, &conditions);
+            let hh_charge = conditions.mean_charge(group);
             let mc_charge = result.charges[2 * i + 1];
             assert!(
                 (mc_charge - hh_charge).abs() < 0.03,
                 "{}: MC={mc_charge:.4}, HH={hh_charge:.4}",
+                group.res_name,
+            );
+            let (mc_var, hh_var) = (
+                result.charge_variance[2 * i + 1],
+                conditions.charge_variance(group),
+            );
+            assert!(
+                (mc_var - hh_var).abs() < 0.02,
+                "{}: var MC={mc_var:.4}, HH={hh_var:.4}",
                 group.res_name,
             );
         }

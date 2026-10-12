@@ -17,11 +17,15 @@
 
 #![warn(missing_docs)]
 
+/// Crate version, for provenance in files written by dependents.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub(crate) mod charge;
 /// Force field model definitions.
 pub mod forcefield;
 pub(crate) mod mc;
 pub(crate) mod mmcif;
+pub(crate) mod moments;
 pub(crate) mod pdb;
 /// Amino acid residue definitions and constants.
 pub mod residue;
@@ -34,9 +38,12 @@ use std::io::BufRead;
 use std::path::Path;
 
 use log::{debug, info};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
-use charge::{ChargeCalculator, Conditions, HendersonHasselbalch};
+use charge::Conditions;
 use mmcif::{AtomRecord, DisulfideBond, ParseOptions};
+use moments::{Moments, center_of_mass};
 use residue::{CTERM_GROUP, NTERM_GROUP, PkaOverrides, TitratableGroup};
 
 // ---------------------------------------------------------------------------
@@ -138,6 +145,8 @@ pub struct ChargeCalc {
     pub mc: usize,
     /// pKa overrides; unlisted groups use the defaults.
     pub pka_overrides: PkaOverrides,
+    /// Charge configurations to keep in [`ChargeResult::snapshots`] (0 = none).
+    pub snapshots: usize,
 }
 
 impl Default for ChargeCalc {
@@ -148,6 +157,7 @@ impl Default for ChargeCalc {
             ionic_strength: 0.1,
             mc: 0,
             pka_overrides: PkaOverrides::default(),
+            snapshots: 0,
         }
     }
 }
@@ -182,6 +192,12 @@ impl ChargeCalc {
         self
     }
 
+    /// Keep this many evenly spaced charge configurations (e.g. for animation).
+    pub fn snapshots(mut self, n: usize) -> Self {
+        self.snapshots = n;
+        self
+    }
+
     /// Override the pKa of a group (side-chain name, NTR or CTR; case-insensitive).
     pub fn with_pka(mut self, name: &str, pka: f64) -> Result<Self, String> {
         self.pka_overrides.insert(name, pka)?;
@@ -201,56 +217,158 @@ impl ChargeCalc {
 
     /// Compute per-bead charges and multipole moments.
     pub fn run(&self, beads: &[Bead]) -> ChargeResult {
-        let conditions = Conditions::from(self);
+        self.start(beads, rand::random()).finish()
+    }
 
-        if self.mc > 0 {
-            let mut engine = mc::TitrationMC::new(beads, &conditions);
-            let n_sites = engine.num_sites();
+    /// Begin a titration that can be advanced in chunks.
+    ///
+    /// Lets single-threaded callers (wasm UIs) stay responsive and show progress;
+    /// `seed` makes runs reproducible and avoids an OS entropy source.
+    pub fn start(&self, beads: &[Bead], seed: u64) -> Titration {
+        let conditions = Conditions::from(self);
+        let mut rng = StdRng::seed_from_u64(seed);
+        let state = if self.mc > 0 {
+            let engine = mc::TitrationMC::new(beads, &conditions);
             debug!(
-                "MC titration: {} sweeps × {} sites = {} trial moves",
+                "MC titration: {} sweeps × {} sites",
                 self.mc,
-                n_sites,
-                self.mc * n_sites,
+                engine.num_sites()
             );
-            let mut rng = rand::thread_rng();
-            let mc_result = engine.run(self.mc, &mut rng);
-            ChargeResult {
-                multipole: Multipole {
-                    charge: mc_result.mean_charge,
-                    charge_sq: mc_result.mean_charge_sq,
-                    dipole: mc_result.mean_dipole,
-                    dipole_sq: mc_result.mean_dipole_sq,
-                },
-                charges: mc_result.charges,
-            }
+            let sampler = mc::Sampler::new(engine.num_sites(), self.mc, self.snapshots);
+            State::Running(Box::new(McRun {
+                engine,
+                sampler,
+                rng,
+                done: 0,
+                total: self.mc,
+            }))
         } else {
-            let hh = HendersonHasselbalch;
-            let rn = res_name_map(beads);
-            // Start from existing charges so non-titratable beads (e.g. metal ions) keep theirs
-            let mut charges: Vec<f64> = beads.iter().map(|b| b.charge).collect();
-            for (i, b) in beads.iter().enumerate() {
-                if let Some(group) = titratable_group_for_bead(b, &rn) {
-                    charges[i] = hh.charge(group, &conditions);
-                }
-            }
-            let multipole = compute_multipole(beads, &charges);
-            ChargeResult { multipole, charges }
+            State::Done(henderson_hasselbalch(
+                beads,
+                &conditions,
+                self.snapshots,
+                &mut rng,
+            ))
+        };
+        Titration { state }
+    }
+}
+
+/// A titration in progress; see [`ChargeCalc::start`].
+pub struct Titration {
+    state: State,
+}
+
+enum State {
+    Running(Box<McRun>),
+    Done(ChargeResult),
+}
+
+struct McRun {
+    engine: mc::TitrationMC,
+    sampler: mc::Sampler,
+    rng: StdRng,
+    done: usize,
+    total: usize,
+}
+
+impl McRun {
+    fn result(&self) -> ChargeResult {
+        let r = self.engine.result(&self.sampler);
+        ChargeResult {
+            multipole: Multipole {
+                charge: r.mean_charge,
+                charge_sq: r.mean_charge_sq,
+                dipole: r.mean_dipole,
+                dipole_sq: r.mean_dipole_sq,
+                quadrupole: r.mean_quadrupole,
+                quadrupole_sq: r.mean_quadrupole_sq,
+            },
+            charges: r.charges,
+            charge_variance: r.charge_variance,
+            snapshots: r.snapshots,
         }
     }
 }
 
-/// Multipole moments: net charge and dipole with their squares.
+impl Titration {
+    /// Run at most `max_sweeps` more sweeps; true once finished.
+    pub fn advance(&mut self, max_sweeps: usize) -> bool {
+        if let State::Running(run) = &mut self.state {
+            let n = max_sweeps.min(run.total - run.done);
+            for _ in 0..n {
+                run.engine.sweep(&mut run.rng);
+                run.engine.sample(&mut run.sampler);
+            }
+            run.done += n;
+            if run.done == run.total {
+                self.state = State::Done(run.result());
+            }
+        }
+        matches!(self.state, State::Done(_))
+    }
+
+    /// Fraction completed, 0–1.
+    pub fn progress(&self) -> f64 {
+        match &self.state {
+            State::Running(run) => run.done as f64 / run.total as f64,
+            State::Done(_) => 1.0,
+        }
+    }
+
+    /// Complete the remaining sweeps and return the result.
+    pub fn finish(mut self) -> ChargeResult {
+        self.advance(usize::MAX);
+        match self.state {
+            State::Done(result) => result,
+            // advance(usize::MAX) always completes
+            State::Running(run) => run.result(),
+        }
+    }
+}
+
+/// Multipole moments about the centre of mass, with their squares.
+///
+/// For Henderson-Hasselbalch the sites are independent, so the squared moments
+/// are exact ensemble averages while the plain ones use mean charges.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Multipole {
     /// Net charge ⟨Z⟩.
     pub charge: f64,
-    /// ⟨Z²⟩ (equals Z² for HH; ensemble average for MC).
+    /// ⟨Z²⟩.
     pub charge_sq: f64,
     /// Dipole moment magnitude ⟨μ⟩ in e·Å.
     pub dipole: f64,
     /// ⟨μ²⟩ in (e·Å)².
     pub dipole_sq: f64,
+    /// Traceless quadrupole norm ⟨‖Θ‖⟩ in e·Å² (Buckingham, Frobenius norm).
+    pub quadrupole: f64,
+    /// ⟨‖Θ‖²⟩ in (e·Å²)².
+    pub quadrupole_sq: f64,
+}
+
+impl Multipole {
+    /// Charge capacitance C = ⟨Z²⟩ − ⟨Z⟩², i.e. how readily the net charge responds.
+    pub fn capacitance(&self) -> f64 {
+        self.charge.mul_add(-self.charge, self.charge_sq).max(0.0)
+    }
+
+    /// Standard deviation of the dipole magnitude.
+    pub fn dipole_std(&self) -> f64 {
+        self.dipole
+            .mul_add(-self.dipole, self.dipole_sq)
+            .max(0.0)
+            .sqrt()
+    }
+
+    /// Standard deviation of the quadrupole norm.
+    pub fn quadrupole_std(&self) -> f64 {
+        self.quadrupole
+            .mul_add(-self.quadrupole, self.quadrupole_sq)
+            .max(0.0)
+            .sqrt()
+    }
 }
 
 /// Result of a charge calculation.
@@ -258,8 +376,12 @@ pub struct Multipole {
 pub struct ChargeResult {
     /// Multipole moments.
     pub multipole: Multipole,
-    /// Per-bead charges (same indexing as input beads).
+    /// Per-bead mean charges (same indexing as input beads).
     pub charges: Vec<f64>,
+    /// Per-bead charge variance; site capacitances, zero for fixed charges.
+    pub charge_variance: Vec<f64>,
+    /// Per-bead charge configurations, as requested by [`ChargeCalc::snapshots`].
+    pub snapshots: Vec<Vec<f64>>,
 }
 
 impl ChargeResult {
@@ -273,6 +395,74 @@ impl ChargeResult {
                 ..b.clone()
             })
             .collect()
+    }
+}
+
+/// Independent-site titration; snapshots are exact independent draws.
+fn henderson_hasselbalch(
+    beads: &[Bead],
+    conditions: &Conditions,
+    num_snapshots: usize,
+    rng: &mut StdRng,
+) -> ChargeResult {
+    let rn = res_name_map(beads);
+    let com = center_of_mass(beads);
+    let rel: Vec<[f64; 3]> = beads
+        .iter()
+        .map(|b| [b.x - com[0], b.y - com[1], b.z - com[2]])
+        .collect();
+    let sites: Vec<(usize, &TitratableGroup)> = beads
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| Some((i, titratable_group_for_bead(b, &rn)?)))
+        .collect();
+
+    // Non-titratable beads (e.g. metal ions) keep their charges
+    let mut charges: Vec<f64> = beads.iter().map(|b| b.charge).collect();
+    let mut charge_variance = vec![0.0; beads.len()];
+    for &(i, g) in &sites {
+        charges[i] = conditions.mean_charge(g);
+        charge_variance[i] = conditions.charge_variance(g);
+    }
+
+    let mean = Moments::from_charges(charges.iter().copied().zip(&rel));
+    // Moments are linear in charge, so independent site variances add.
+    let (mut z_var, mut mu_var, mut theta_var) = (0.0, 0.0, 0.0);
+    for &(i, ..) in &sites {
+        let unit = Moments::from_charges([(1.0, &rel[i])]);
+        z_var += charge_variance[i];
+        mu_var += charge_variance[i] * unit.dipole_sq();
+        theta_var += charge_variance[i] * unit.quadrupole_sq();
+    }
+    let (mu_sq, theta_sq) = (mean.dipole_sq(), mean.quadrupole_sq());
+
+    let snapshots = (0..num_snapshots)
+        .map(|_| {
+            let mut q = charges.clone();
+            for &(i, g) in &sites {
+                let deprotonated = rng.r#gen::<f64>() < conditions.fraction_deprotonated(g);
+                q[i] = if deprotonated {
+                    g.charge_deprotonated
+                } else {
+                    g.charge_protonated
+                };
+            }
+            q
+        })
+        .collect();
+
+    ChargeResult {
+        multipole: Multipole {
+            charge: mean.z,
+            charge_sq: mean.z.mul_add(mean.z, z_var),
+            dipole: mu_sq.sqrt(),
+            dipole_sq: mu_sq + mu_var,
+            quadrupole: theta_sq.sqrt(),
+            quadrupole_sq: theta_sq + theta_var,
+        },
+        charges,
+        charge_variance,
+        snapshots,
     }
 }
 
@@ -418,6 +608,23 @@ pub fn coarse_grain_pdb_with<R: BufRead>(reader: R, policy: &dyn CoarseGrain) ->
     beads_from_parsed(&parsed, policy)
 }
 
+/// Coarse-grain PDB or mmCIF, detected from content rather than file name.
+pub fn coarse_grain_bytes(data: &[u8], policy: &dyn CoarseGrain) -> Vec<Bead> {
+    if is_mmcif(data) {
+        coarse_grain_with(data, policy)
+    } else {
+        coarse_grain_pdb_with(data, policy)
+    }
+}
+
+/// mmCIF always opens with a `data_` block; PDB never does.
+fn is_mmcif(data: &[u8]) -> bool {
+    data.split(|&c| c == b'\n')
+        .map(|l| l.trim_ascii())
+        .find(|l| !l.is_empty() && !l.starts_with(b"#"))
+        .is_some_and(|l| l.starts_with(b"data_"))
+}
+
 // Both coarse_grain_with and coarse_grain_pdb_with produce a ParsedMmcif, so the
 // downstream bead-building logic is shared here rather than duplicated per format.
 fn beads_from_parsed(parsed: &mmcif::ParsedMmcif, policy: &dyn CoarseGrain) -> Vec<Bead> {
@@ -542,24 +749,6 @@ fn records_to_beads(
     );
 
     beads
-}
-
-/// Compute multipole moments from beads and external charges.
-fn compute_multipole(beads: &[Bead], charges: &[f64]) -> Multipole {
-    let charge: f64 = charges.iter().sum();
-    let (mut mx, mut my, mut mz) = (0.0, 0.0, 0.0);
-    for (b, &q) in beads.iter().zip(charges) {
-        mx += q * b.x;
-        my += q * b.y;
-        mz += q * b.z;
-    }
-    let dipole = mz.mul_add(mz, mx.mul_add(mx, my * my)).sqrt();
-    Multipole {
-        charge,
-        charge_sq: charge * charge,
-        dipole,
-        dipole_sq: dipole * dipole,
-    }
 }
 
 /// Map (chain_id, res_seq) → residue name from backbone/titratable beads.
@@ -1357,15 +1546,82 @@ ATOM 14 OXT ALA A 2 6.800 -1.800 0.500 O . 1
         let beads = coarse_grain(TEST_CIF.as_bytes());
         let result = ChargeCalc::new().run(&beads);
 
-        // HH is deterministic: charge_sq == charge²
+        // Independent sites: capacitance is the sum of site variances
         let m = &result.multipole;
-        assert!(
-            (m.charge_sq - m.charge * m.charge).abs() < 1e-10,
-            "HH: ⟨Z²⟩ should equal ⟨Z⟩²"
-        );
-        assert!(
-            (m.dipole_sq - m.dipole * m.dipole).abs() < 1e-10,
-            "HH: ⟨μ²⟩ should equal ⟨μ⟩²"
-        );
+        let site_sum: f64 = result.charge_variance.iter().sum();
+        assert!((m.capacitance() - site_sum).abs() < 1e-10);
+        assert!(m.dipole_sq >= m.dipole * m.dipole);
+        assert!(m.quadrupole_sq >= m.quadrupole * m.quadrupole);
+    }
+
+    #[test]
+    fn detects_format_from_content() {
+        let cif = coarse_grain_bytes(TEST_CIF.as_bytes(), &MultiBead);
+        assert_eq!(cif.len(), coarse_grain(TEST_CIF.as_bytes()).len());
+        assert!(!is_mmcif(b"HEADER    PROTEIN\nATOM      1  N   ALA A   1"));
+        assert!(is_mmcif(b"# comment\n\ndata_1ABC\n"));
+    }
+
+    #[test]
+    fn mc_keeps_fixed_ion_charges() {
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let result = ChargeCalc::new().mc(200).run(&beads);
+        let zn = beads.iter().position(|b| b.res_name == "ZN").unwrap();
+        assert_eq!(result.charges[zn], 2.0);
+        assert_eq!(result.charge_variance[zn], 0.0);
+        let sum: f64 = result.charges.iter().sum();
+        assert!((result.multipole.charge - sum).abs() < 1e-9);
+    }
+
+    #[test]
+    fn moments_do_not_depend_on_frame() {
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let shifted: Vec<Bead> = beads
+            .iter()
+            .map(|b| Bead {
+                x: b.x + 100.0,
+                y: b.y - 50.0,
+                ..b.clone()
+            })
+            .collect();
+        for calc in [ChargeCalc::new(), ChargeCalc::new().mc(500)] {
+            let a = calc.start(&beads, 1).finish().multipole;
+            let b = calc.start(&shifted, 1).finish().multipole;
+            assert!((a.dipole - b.dipole).abs() < 1e-8);
+            assert!((a.quadrupole - b.quadrupole).abs() < 1e-8);
+        }
+    }
+
+    #[test]
+    fn chunked_titration_matches_single_run() {
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let calc = ChargeCalc::new().mc(1000).snapshots(4);
+        let whole = calc.start(&beads, 7).finish();
+        let mut chunked = calc.start(&beads, 7);
+        let mut steps = 0;
+        while !chunked.advance(77) {
+            steps += 1;
+            assert!(chunked.progress() < 1.0);
+        }
+        assert!(steps > 1);
+        let chunked = chunked.finish();
+        assert_eq!(whole.charges, chunked.charges);
+        assert_eq!(whole.multipole.quadrupole, chunked.multipole.quadrupole);
+        assert_eq!(chunked.snapshots.len(), 4);
+        assert!(chunked.snapshots.iter().all(|s| s.len() == beads.len()));
+    }
+
+    #[test]
+    fn hh_snapshots_are_discrete_states() {
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let result = ChargeCalc::new()
+            .ph(4.0)
+            .snapshots(8)
+            .start(&beads, 3)
+            .finish();
+        assert_eq!(result.snapshots.len(), 8);
+        for snap in &result.snapshots {
+            assert!(snap.iter().all(|q| (q - q.round()).abs() < 1e-12));
+        }
     }
 }

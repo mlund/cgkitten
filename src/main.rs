@@ -328,9 +328,13 @@ fn run_convert(
     let result = calc.run(&beads);
     let charged = result.apply(&beads);
 
+    let m = &result.multipole;
     info!(
-        "⟨Z⟩ = {:.2}, ⟨μ⟩ = {:.1} e·Å",
-        result.multipole.charge, result.multipole.dipole
+        "⟨Z⟩ = {:.2}, C = {:.2}, ⟨μ⟩ = {:.1} e·Å, ⟨‖Θ‖⟩ = {:.0} e·Å²",
+        m.charge,
+        m.capacitance(),
+        m.dipole,
+        m.quadrupole
     );
 
     if common.mc > 0 {
