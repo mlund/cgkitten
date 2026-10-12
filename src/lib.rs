@@ -37,7 +37,7 @@ use log::{debug, info};
 
 use charge::{ChargeCalculator, Conditions, HendersonHasselbalch};
 use mmcif::{AtomRecord, DisulfideBond, ParseOptions};
-use residue::{CTERM_GROUP, NTERM_GROUP, TitratableGroup};
+use residue::{CTERM_GROUP, NTERM_GROUP, PkaOverrides, TitratableGroup};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -115,6 +115,9 @@ impl std::fmt::Display for BeadType {
 /// // Builder pattern
 /// let result = ChargeCalc::new().ph(7.4).mc(10000).run(&beads);
 ///
+/// // Override pKa values (side-chain name, NTR or CTR)
+/// let result = ChargeCalc::new().with_pka("HIS", 6.0)?.run(&beads);
+///
 /// // Direct construction
 /// let result = ChargeCalc { ph: 7.4, mc: 10000, ..Default::default() }.run(&beads);
 ///
@@ -133,6 +136,8 @@ pub struct ChargeCalc {
     pub ionic_strength: f64,
     /// Monte Carlo sweeps per titratable site (0 = Henderson-Hasselbalch only).
     pub mc: usize,
+    /// pKa overrides; unlisted groups use the defaults.
+    pub pka_overrides: PkaOverrides,
 }
 
 impl Default for ChargeCalc {
@@ -142,6 +147,7 @@ impl Default for ChargeCalc {
             temperature: 298.15,
             ionic_strength: 0.1,
             mc: 0,
+            pka_overrides: PkaOverrides::default(),
         }
     }
 }
@@ -176,6 +182,12 @@ impl ChargeCalc {
         self
     }
 
+    /// Override the pKa of a group (side-chain name, NTR or CTR; case-insensitive).
+    pub fn with_pka(mut self, name: &str, pka: f64) -> Result<Self, String> {
+        self.pka_overrides.insert(name, pka)?;
+        Ok(self)
+    }
+
     /// Log physical conditions (pH, T, I, Bjerrum/Debye lengths).
     pub fn log_conditions(&self) {
         let lb = mc::bjerrum_length(self.temperature);
@@ -184,6 +196,7 @@ impl ChargeCalc {
             "pH={:.2} T={:.1} K I={:.3} M λ_B={:.2} Å λ_D={:.2} Å",
             self.ph, self.temperature, self.ionic_strength, lb, ld,
         );
+        info!("pKa: {}", self.pka_overrides);
     }
 
     /// Compute per-bead charges and multipole moments.
@@ -1013,6 +1026,31 @@ HETATM 99 ZN ZN A 100 5.000 5.000 5.000 ZN . 1
                 .all(|b| b.charge.abs() < 1e-10),
             "backbone beads should have zero charge"
         );
+    }
+
+    #[test]
+    fn pka_builder_validates() {
+        // Rules are tested on PkaOverrides; this checks the builder forwards them
+        let calc = ChargeCalc::new().with_pka("ctr", 3.1).unwrap();
+        assert!(calc.pka_overrides.to_string().ends_with("CTR=3.10"));
+        assert!(ChargeCalc::new().with_pka("FOO", 4.0).is_err());
+    }
+
+    #[test]
+    fn pka_override_changes_charge() {
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let ctr_charge = |calc: ChargeCalc| {
+            let charges = calc.run(&beads).apply(&beads);
+            charges
+                .iter()
+                .find(|b| b.bead_type == BeadType::Ctr)
+                .unwrap()
+                .charge
+        };
+        let default = ctr_charge(ChargeCalc::new());
+        let shifted = ctr_charge(ChargeCalc::new().with_pka("CTR", 7.0).unwrap());
+        assert!(default < -0.99, "CTR default: {default}");
+        assert!((shifted + 0.5).abs() < 1e-10, "CTR at pKa=pH: {shifted}");
     }
 
     #[test]

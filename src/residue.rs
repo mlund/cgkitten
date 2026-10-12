@@ -3,6 +3,8 @@
 //! Each amino acid is reduced to a single backbone bead at the center of mass.
 //! Titratable residues get an additional side-chain bead placed at the charge center.
 
+use std::collections::BTreeMap;
+
 use crate::mmcif::AtomRecord;
 
 /// The 20 standard amino acid three-letter codes.
@@ -83,11 +85,13 @@ pub struct TitratableGroup {
     pub element: &'static str,
 }
 
-/// Standard titratable groups with canonical pKa values.
+/// Standard titratable groups. Default pKa values are from blocked Ala pentapeptides
+/// (Thurlkill et al. 2006, doi:10.1110/ps.051840806), i.e. groups in an unfolded chain,
+/// matching Faunus. Arg was not measured there; 12.0 is the conventional value.
 pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
     TitratableGroup {
         res_name: "ASP",
-        pka: 3.65,
+        pka: 3.67,
         charge_protonated: 0.0,
         charge_deprotonated: -1.0,
         center_atoms: &["OD1", "OD2"],
@@ -103,7 +107,7 @@ pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
     },
     TitratableGroup {
         res_name: "HIS",
-        pka: 6.00,
+        pka: 6.54,
         charge_protonated: 1.0,
         charge_deprotonated: 0.0,
         center_atoms: &["ND1", "NE2"],
@@ -111,7 +115,7 @@ pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
     },
     TitratableGroup {
         res_name: "CYS",
-        pka: 8.18,
+        pka: 8.55,
         charge_protonated: 0.0,
         charge_deprotonated: -1.0,
         center_atoms: &["SG"],
@@ -119,7 +123,7 @@ pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
     },
     TitratableGroup {
         res_name: "TYR",
-        pka: 10.07,
+        pka: 9.84,
         charge_protonated: 0.0,
         charge_deprotonated: -1.0,
         center_atoms: &["OH"],
@@ -127,7 +131,7 @@ pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
     },
     TitratableGroup {
         res_name: "LYS",
-        pka: 10.54,
+        pka: 10.40,
         charge_protonated: 1.0,
         charge_deprotonated: 0.0,
         center_atoms: &["NZ"],
@@ -135,7 +139,7 @@ pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
     },
     TitratableGroup {
         res_name: "ARG",
-        pka: 12.48,
+        pka: 12.0,
         charge_protonated: 1.0,
         charge_deprotonated: 0.0,
         center_atoms: &["NH1", "NH2"],
@@ -145,7 +149,7 @@ pub static TITRATABLE_GROUPS: &[TitratableGroup] = &[
 
 /// N-terminal group.
 pub static NTERM_GROUP: TitratableGroup = TitratableGroup {
-    res_name: "NTERM",
+    res_name: "NTR",
     pka: 8.0,
     charge_protonated: 1.0,
     charge_deprotonated: 0.0,
@@ -155,8 +159,8 @@ pub static NTERM_GROUP: TitratableGroup = TitratableGroup {
 
 /// C-terminal group.
 pub static CTERM_GROUP: TitratableGroup = TitratableGroup {
-    res_name: "CTERM",
-    pka: 3.1,
+    res_name: "CTR",
+    pka: 3.67,
     charge_protonated: 0.0,
     charge_deprotonated: -1.0,
     center_atoms: &["OXT", "O"],
@@ -166,6 +170,90 @@ pub static CTERM_GROUP: TitratableGroup = TitratableGroup {
 /// Look up the titratable group for a residue, if any.
 pub fn find_titratable_group(res_name: &str) -> Option<&'static TitratableGroup> {
     TITRATABLE_GROUPS.iter().find(|g| g.res_name == res_name)
+}
+
+/// All titratable groups: side chains plus NTR and CTR.
+fn all_groups() -> impl Iterator<Item = &'static TitratableGroup> {
+    TITRATABLE_GROUPS.iter().chain([&NTERM_GROUP, &CTERM_GROUP])
+}
+
+/// Names accepted as pKa override keys: side chains plus NTR and CTR.
+fn titratable_names() -> impl Iterator<Item = &'static str> {
+    all_groups().map(|g| g.res_name)
+}
+
+/// Validated pKa overrides. Keys are upper-cased and checked on every route
+/// in (builder, serde, CLI), so lookups never miss on a typo or case mismatch.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize, serde::Serialize),
+    serde(try_from = "BTreeMap<String, f64>", into = "BTreeMap<String, f64>")
+)]
+pub struct PkaOverrides(BTreeMap<String, f64>);
+
+impl PkaOverrides {
+    /// Add an override (case-insensitive name). Rejects unknown names,
+    /// non-finite values, and repeats, which would otherwise drop a value silently.
+    pub fn insert(&mut self, name: &str, pka: f64) -> Result<(), String> {
+        let name = name.trim().to_ascii_uppercase();
+        if !titratable_names().any(|n| n == name) {
+            let valid: Vec<_> = titratable_names().collect();
+            return Err(format!(
+                "unknown titratable group '{name}' (valid: {})",
+                valid.join(", ")
+            ));
+        }
+        if !pka.is_finite() {
+            return Err(format!("pKa for {name} must be finite, got {pka}"));
+        }
+        if self.0.contains_key(&name) {
+            return Err(format!("pKa for {name} given more than once"));
+        }
+        self.0.insert(name, pka);
+        Ok(())
+    }
+
+    /// True if no overrides are set.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// pKa for `group`: the override if set, else the default.
+    pub fn effective(&self, group: &TitratableGroup) -> f64 {
+        self.0.get(group.res_name).copied().unwrap_or(group.pka)
+    }
+
+    /// Effective pKa of every group, for recording in output headers.
+    pub fn table(&self) -> impl Iterator<Item = (&'static str, f64)> + '_ {
+        all_groups().map(|g| (g.res_name, self.effective(g)))
+    }
+}
+
+impl TryFrom<BTreeMap<String, f64>> for PkaOverrides {
+    type Error = String;
+    fn try_from(map: BTreeMap<String, f64>) -> Result<Self, String> {
+        let mut overrides = Self::default();
+        for (name, pka) in map {
+            overrides.insert(&name, pka)?;
+        }
+        Ok(overrides)
+    }
+}
+
+impl From<PkaOverrides> for BTreeMap<String, f64> {
+    fn from(overrides: PkaOverrides) -> Self {
+        overrides.0
+    }
+}
+
+/// Full effective table ("ASP=3.67 GLU=4.25 ..."), so logs and headers show
+/// every value used, not only the overrides.
+impl std::fmt::Display for PkaOverrides {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pairs: Vec<_> = self.table().map(|(n, p)| format!("{n}={p:.2}")).collect();
+        write!(f, "{}", pairs.join(" "))
+    }
 }
 
 const CYS: &str = "CYS";
@@ -238,6 +326,44 @@ mod tests {
         assert!(find_titratable_group("CYS").is_some());
         assert!(find_titratable_group("TYR").is_some());
         assert!(find_titratable_group("ALA").is_none());
+    }
+
+    #[test]
+    fn default_pka_is_thurlkill() {
+        let expected = [
+            ("ASP", 3.67),
+            ("GLU", 4.25),
+            ("HIS", 6.54),
+            ("CYS", 8.55),
+            ("TYR", 9.84),
+            ("LYS", 10.40),
+            ("ARG", 12.0),
+        ];
+        for (name, pka) in expected {
+            assert_eq!(find_titratable_group(name).unwrap().pka, pka, "{name}");
+        }
+        assert_eq!(NTERM_GROUP.pka, 8.0);
+        assert_eq!(CTERM_GROUP.pka, 3.67);
+        assert_eq!(titratable_names().count(), 9);
+    }
+
+    #[test]
+    fn pka_overrides_validate() {
+        let mut o = PkaOverrides::default();
+        o.insert("his", 6.0).unwrap();
+        assert_eq!(o.effective(find_titratable_group("HIS").unwrap()), 6.0);
+        assert_eq!(o.effective(&CTERM_GROUP), CTERM_GROUP.pka);
+        assert!(o.to_string().contains("HIS=6.00 "));
+        assert!(o.insert("HIS", 7.0).is_err(), "repeat");
+        assert!(o.insert("FOO", 4.0).is_err());
+        assert!(o.insert("CTR", f64::NAN).is_err());
+        assert_eq!(o.table().count(), 9);
+        // Map route (serde) normalises case and rejects bad keys
+        let ok = PkaOverrides::try_from(BTreeMap::from([("ctr".to_string(), 3.1)])).unwrap();
+        assert_eq!(ok.effective(&CTERM_GROUP), 3.1);
+        assert!(PkaOverrides::try_from(BTreeMap::from([("CTRM".to_string(), 3.1)])).is_err());
+        let dup = BTreeMap::from([("his".to_string(), 6.0), ("HIS".to_string(), 7.0)]);
+        assert!(PkaOverrides::try_from(dup).is_err());
     }
 
     #[test]

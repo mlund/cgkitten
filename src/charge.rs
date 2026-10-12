@@ -3,7 +3,7 @@
 //! Provides a [`ChargeCalculator`] trait for extensibility, with a default
 //! implementation using Henderson-Hasselbalch.
 
-use crate::residue::TitratableGroup;
+use crate::residue::{PkaOverrides, TitratableGroup};
 
 /// Solution conditions for charge calculation.
 #[derive(Clone, Debug)]
@@ -13,6 +13,15 @@ pub struct Conditions {
     pub temperature: f64,
     /// Ionic strength in mol/L.
     pub ionic_strength: f64,
+    /// pKa overrides; groups not listed use their defaults.
+    pub pka_overrides: PkaOverrides,
+}
+
+impl Conditions {
+    /// Henderson-Hasselbalch deprotonated fraction of `group`, honouring overrides.
+    pub fn fraction_deprotonated(&self, group: &TitratableGroup) -> f64 {
+        1.0 / (1.0 + 10_f64.powf(self.pka_overrides.effective(group) - self.ph))
+    }
 }
 
 impl Default for Conditions {
@@ -21,6 +30,7 @@ impl Default for Conditions {
             ph: 7.0,
             temperature: 298.15,
             ionic_strength: 0.1,
+            pka_overrides: PkaOverrides::default(),
         }
     }
 }
@@ -31,6 +41,7 @@ impl From<&crate::ChargeCalc> for Conditions {
             ph: calc.ph,
             temperature: calc.temperature,
             ionic_strength: calc.ionic_strength,
+            pka_overrides: calc.pka_overrides.clone(),
         }
     }
 }
@@ -50,7 +61,7 @@ pub struct HendersonHasselbalch;
 
 impl ChargeCalculator for HendersonHasselbalch {
     fn charge(&self, group: &TitratableGroup, conditions: &Conditions) -> f64 {
-        let fraction_deprotonated = 1.0 / (1.0 + 10_f64.powf(group.pka - conditions.ph));
+        let fraction_deprotonated = conditions.fraction_deprotonated(group);
         fraction_deprotonated * group.charge_deprotonated
             + (1.0 - fraction_deprotonated) * group.charge_protonated
     }
@@ -80,6 +91,21 @@ mod tests {
                 group.res_name,
             );
         }
+    }
+
+    #[test]
+    fn pka_override_shifts_charge() {
+        let hh = HendersonHasselbalch;
+        let his = crate::residue::find_titratable_group("HIS").unwrap();
+        let mut conditions = conditions_at_ph(7.0);
+        let default = hh.charge(his, &conditions);
+        conditions.pka_overrides.insert("HIS", 7.0).unwrap();
+        assert!((hh.charge(his, &conditions) - 0.5).abs() < 1e-10);
+        assert!(default < 0.5);
+        // Overrides for other groups leave HIS untouched
+        conditions.pka_overrides = PkaOverrides::default();
+        conditions.pka_overrides.insert("LYS", 5.0).unwrap();
+        assert_eq!(hh.charge(his, &conditions), default);
     }
 
     #[test]

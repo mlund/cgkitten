@@ -161,6 +161,7 @@ With `-o`, scan data is saved to a space-separated file with columns:
 
 where Z is net charge, Z2 is the second moment, mu is dipole moment (e*A), and
 mu2 is the dipole second moment. MC columns are included when `--mc` > 0.
+A second comment line, `# pKa ASP=3.67 GLU=4.25 ...`, records the pKa set used.
 
 ## Shared flags
 
@@ -171,6 +172,27 @@ mu2 is the dipole second moment. MC columns are included when `--mc` > 0.
 | `--mc` | 10000 | Number of MC titration sweeps (0 = Henderson-Hasselbalch only) |
 | `--cg` | `multi` | Coarse-graining policy (`multi` or `single`) |
 | `--chain` | all | Select specific chain(s); repeat for multiple |
+| `--pka` | see below | Override a pKa as `NAME=PKA`; repeat for multiple |
+
+## pKa values
+
+Defaults are intrinsic pKa values measured in blocked alanine pentapeptides
+([Thurlkill et al. 2006](https://doi.org/10.1110/ps.051840806)), i.e. groups in
+an unfolded chain.
+
+| Group | ASP | GLU | HIS | CYS | TYR | LYS | ARG | NTR | CTR |
+|-------|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+| pKa | 3.67 | 4.25 | 6.54 | 8.55 | 9.84 | 10.40 | 12.0* | 8.00 | 3.67 |
+
+\*Not measured by Thurlkill et al.; conventional value.
+
+Disulfide-bonded cysteines (CYX) are not titrated. Override any group with
+`--pka` (names are case-insensitive; each group at most once). The pKa set used
+is written to the PQR (`REMARK pKa ...`) and scan file headers.
+
+```sh
+cgkitten structure.cif --pka HIS=6.0 --pka CTR=3.1 scan
+```
 
 ## Monte Carlo titration
 

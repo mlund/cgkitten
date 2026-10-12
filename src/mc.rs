@@ -136,8 +136,8 @@ impl TitrationMC {
         for (i, b) in beads.iter().enumerate() {
             if let Some(group) = crate::titratable_group_for_bead(b, &rn) {
                 // Use HH fraction to set initial discrete state; MC will equilibrate from here
-                let f_deprot = 1.0 / (1.0 + 10_f64.powf(group.pka - conditions.ph));
-                let is_protonated = f_deprot < 0.5;
+                let pka = conditions.pka_overrides.effective(group);
+                let is_protonated = conditions.fraction_deprotonated(group) < 0.5;
                 charges.push(if is_protonated {
                     group.charge_protonated
                 } else {
@@ -148,8 +148,8 @@ impl TitrationMC {
                     bead_index: i,
                     is_protonated,
                     dq_deprot: group.charge_deprotonated - group.charge_protonated,
-                    du_chem_deprot: LN_10 * (group.pka - conditions.ph),
-                    du_chem_prot: LN_10 * (conditions.ph - group.pka),
+                    du_chem_deprot: LN_10 * (pka - conditions.ph),
+                    du_chem_prot: LN_10 * (conditions.ph - pka),
                 });
             }
         }
@@ -474,7 +474,7 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
         let beads = coarse_grain(cif.as_bytes());
 
         let conditions = Conditions {
-            ph: 3.65,
+            ph: crate::residue::find_titratable_group("ASP").unwrap().pka,
             ..Default::default()
         };
         let mut mc = TitrationMC::new(&beads, &conditions);
@@ -498,10 +498,12 @@ ATOM 6 OD2 ASP A 1 100.0 100.0 102.0 O . 1
         use crate::residue::TITRATABLE_GROUPS;
 
         let ph = 7.0;
-        let conditions = Conditions {
+        // Override HIS to pH so its HH charge is 0.5, the hardest case for MC to match
+        let mut conditions = Conditions {
             ph,
             ..Default::default()
         };
+        conditions.pka_overrides.insert("HIS", ph).unwrap();
         let hh = HendersonHasselbalch;
 
         let mut beads = Vec::new();

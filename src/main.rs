@@ -56,6 +56,37 @@ struct CommonArgs {
     /// Include only these chain IDs (default: all chains). Repeat to include multiple: --chain A --chain B
     #[arg(long)]
     chain: Vec<String>,
+
+    /// Override a pKa value (side-chain name, NTR or CTR). Repeatable: --pka HIS=6.0 --pka CTR=3.1
+    #[arg(long, value_name = "NAME=PKA", value_parser = parse_pka)]
+    pka: Vec<(String, f64)>,
+}
+
+impl CommonArgs {
+    /// Charge calculator from the shared conditions; pH is set per subcommand.
+    /// Fails on a group given twice, which per-argument parsing can't see.
+    fn charge_calc(&self) -> io::Result<ChargeCalc> {
+        let calc = ChargeCalc::new()
+            .temperature(self.temperature)
+            .ionic_strength(self.ionic_strength)
+            .mc(self.mc);
+        self.pka
+            .iter()
+            .try_fold(calc, |calc, (name, pka)| calc.with_pka(name, *pka))
+            .map_err(invalid_input)
+    }
+}
+
+/// Parse NAME=PKA syntax; names are checked by `CommonArgs::charge_calc`.
+fn parse_pka(arg: &str) -> Result<(String, f64), String> {
+    let (name, value) = arg
+        .split_once('=')
+        .ok_or_else(|| format!("expected NAME=PKA, got '{arg}'"))?;
+    let value: f64 = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid pKa value '{value}'"))?;
+    Ok((name.to_string(), value))
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -180,6 +211,10 @@ fn format_pqr(beads: &[Bead], names: &[String], calc: &ChargeCalc) -> io::Result
         calc.ph, calc.temperature, calc.ionic_strength,
     )
     .expect("writing to String is infallible");
+    // One record per group keeps lines within the 80-column PQR width
+    for (name, pka) in calc.pka_overrides.table() {
+        writeln!(out, "REMARK pKa {name} {pka:.2}").expect("writing to String is infallible");
+    }
     for (i, b) in beads.iter().enumerate() {
         let atom_name = match b.bead_type {
             BeadType::Residue | BeadType::Titratable => "CA",
@@ -263,11 +298,7 @@ fn run_convert(
         scale_hydrophobic,
         merge_tol,
     } = args;
-    let calc = ChargeCalc::new()
-        .ph(ph)
-        .temperature(common.temperature)
-        .ionic_strength(common.ionic_strength)
-        .mc(common.mc);
+    let calc = common.charge_calc()?.ph(ph);
 
     let scaling: cgkitten::forcefield::HydrophobicScaling = scale_hydrophobic
         .as_deref()
@@ -361,16 +392,14 @@ fn run_scan(
     ph_step: f64,
     output: Option<PathBuf>,
 ) -> io::Result<()> {
+    // Validate pKa overrides before the (slow) structure read
+    let base_calc = common.charge_calc()?;
     match &common.input {
         Some(path) => info!("Input: {}", path.display()),
         None => info!("Input: stdin"),
     }
     let beads = filter_chains(read_beads(&common.input, policy)?, &common.chain);
     log_chains(&beads);
-    let base_calc = ChargeCalc::new()
-        .temperature(common.temperature)
-        .ionic_strength(common.ionic_strength)
-        .mc(common.mc);
     base_calc.log_conditions();
     let ph_values = ph_steps(ph_start, ph_end, ph_step)?;
 
@@ -417,6 +446,8 @@ fn run_scan(
         } else {
             writeln!(file, "# pH Z(HH) Z2(HH) mu(HH) mu2(HH)")?;
         }
+        // Record the pKa set so curves stay traceable across default changes
+        writeln!(file, "# pKa {}", base_calc.pka_overrides)?;
         for (i, (ph, hh)) in hh_data.iter().enumerate() {
             let m = &hh.multipole;
             if let Some(mc) = &mc_data {
@@ -507,5 +538,23 @@ mod tests {
         assert_eq!(ph_steps(3.0, 4.0, 0.5).unwrap(), [3.0, 3.5, 4.0]);
         assert!(ph_steps(5.0, 4.0, 0.5).is_err());
         assert!(ph_steps(3.0, 4.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn parse_pka_validates() {
+        assert_eq!(parse_pka("his=6.3").unwrap(), ("his".into(), 6.3));
+        assert!(parse_pka("HIS").is_err());
+        assert!(parse_pka("HIS=abc").is_err());
+    }
+
+    #[test]
+    fn bad_pka_names_rejected() {
+        let calc = |args: &[&str]| {
+            let cli = Cli::try_parse_from([&["cgkitten"], args, &["scan"]].concat()).unwrap();
+            cli.common.charge_calc()
+        };
+        assert!(calc(&["--pka", " his =6"]).is_ok());
+        assert!(calc(&["--pka", "XYZ=1"]).is_err());
+        assert!(calc(&["--pka", "HIS=6", "--pka", "his=7"]).is_err());
     }
 }
