@@ -8,16 +8,27 @@ use std::io::BufRead;
 /// Parsed atom record with coordinates and metadata.
 #[derive(Clone, Debug)]
 pub struct AtomRecord {
+    /// `ATOM` or `HETATM`.
     pub record_name: String,
+    /// Atom name, e.g. `CA`.
     pub name: String,
+    /// Alternate location; cleared once a conformer is chosen.
     pub alt_loc: String,
+    /// Residue name, e.g. `GLU`.
     pub res_name: String,
+    /// Chain identifier.
     pub chain_id: String,
+    /// Residue sequence number.
     pub res_seq: i32,
+    /// Insertion code.
     pub i_code: String,
+    /// Coordinates in Å.
     pub x: f64,
+    /// Coordinates in Å.
     pub y: f64,
+    /// Coordinates in Å.
     pub z: f64,
+    /// Element symbol, e.g. `C`.
     pub element: String,
 }
 
@@ -331,18 +342,16 @@ pub(crate) fn is_hydrogen(record: &AtomRecord) -> bool {
     record.name.starts_with('H') || record.element == "H" || record.element == "D"
 }
 
-fn is_acceptable(record: &AtomRecord, options: &ParseOptions) -> bool {
-    if !record.alt_loc.is_empty()
-        && record.alt_loc != "A"
-        && record.alt_loc != "1"
-        && record.alt_loc != "."
-    {
+/// Record filter shared by both parsers: first conformer, optional hydrogens, no water.
+pub(crate) fn is_acceptable(record: &AtomRecord, options: &ParseOptions) -> bool {
+    // "." is mmCIF's "no altloc"; PDB leaves the column blank.
+    if !matches!(record.alt_loc.as_str(), "" | "A" | "1" | ".") {
         return false;
     }
     if !options.include_hydrogens && is_hydrogen(record) {
         return false;
     }
-    if record.res_name == "HOH" || record.res_name == "WAT" || record.res_name == "DOD" {
+    if crate::residue::is_water(&record.res_name) {
         return false;
     }
     true

@@ -6,7 +6,7 @@
 use std::io::BufRead;
 
 use crate::mmcif::{
-    AtomRecord, DisulfideBond, ParseOptions, ParsedMmcif, is_hydrogen, normalize_atom_name,
+    AtomRecord, DisulfideBond, ParseOptions, ParsedMmcif, is_acceptable, normalize_atom_name,
 };
 
 /// Extract a substring from fixed-width PDB columns (1-indexed, inclusive).
@@ -75,17 +75,6 @@ fn parse_ssbond_line(line: &str) -> Option<DisulfideBond> {
         chain_id_2,
         res_seq_2,
     })
-}
-
-fn is_acceptable(record: &AtomRecord, options: &ParseOptions) -> bool {
-    // AltLoc: accept empty, "A", or "1"
-    if !record.alt_loc.is_empty() && record.alt_loc != "A" && record.alt_loc != "1" {
-        return false;
-    }
-    if !options.include_hydrogens && is_hydrogen(record) {
-        return false;
-    }
-    true
 }
 
 /// Parse ATOM/HETATM records and SSBOND disulfide bonds from a PDB file.

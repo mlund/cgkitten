@@ -23,6 +23,14 @@ pub const HYDROPHOBIC_RESIDUES: &[&str] = &[
     "ALA", "ILE", "LEU", "MET", "PHE", "PRO", "TRP", "TYR", "VAL",
 ];
 
+/// Water, dropped by both parsers: crystallographic names and common MD force-field ones.
+pub fn is_water(res_name: &str) -> bool {
+    matches!(
+        res_name,
+        "HOH" | "WAT" | "DOD" | "H2O" | "SOL" | "TIP" | "TIP3" | "TIP3P" | "TIP4" | "TIP4P" | "SPC"
+    )
+}
+
 /// Returns true if residue name is a standard amino acid or a known variant (CYX).
 pub fn is_amino_acid(res_name: &str) -> bool {
     STANDARD_RESIDUES.contains(&parent_residue(res_name))

@@ -27,18 +27,20 @@ const BOLTZMANN_CONSTANT: f64 = 1.380_649e-23; // J/K
 const AVOGADRO: f64 = 6.022_140_76e23; // mol⁻¹
 const WATER_DIELECTRIC: f64 = 78.4;
 
-/// Bjerrum length in Ångströms.
+/// Bjerrum length in Ångströms for `temperature` in kelvin.
 ///
-/// λ_B = e² / (4π ε₀ ε_r k T)
+/// λ_B = e² / (4π ε₀ ε_r k T), with water's ε_r = 78.4 held fixed (no temperature
+/// dependence), as in the titration.
 pub fn bjerrum_length(temperature: f64) -> f64 {
     let lb_m = ELEMENTARY_CHARGE.powi(2)
         / (4.0 * PI * VACUUM_PERMITTIVITY * WATER_DIELECTRIC * BOLTZMANN_CONSTANT * temperature);
     lb_m * 1e10 // convert m → Å
 }
 
-/// Debye screening length in Ångströms.
+/// Debye screening length in Ångströms for `temperature` in kelvin and
+/// `ionic_strength` in mol/L; infinite without salt.
 ///
-/// λ_D = 1/κ where κ² = 2 N_A e² I · 1000 / (ε₀ ε_r k T)
+/// λ_D = 1/κ where κ² = 2 N_A e² I · 1000 / (ε₀ ε_r k T), ε_r = 78.4 fixed.
 pub fn debye_length(temperature: f64, ionic_strength: f64) -> f64 {
     if ionic_strength <= 0.0 {
         return f64::INFINITY;

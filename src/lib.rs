@@ -21,6 +21,10 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) mod charge;
+
+/// An all-atom record, as parsed from PDB or mmCIF.
+pub use mmcif::AtomRecord as Atom;
+pub use mc::{bjerrum_length, debye_length};
 /// Force field model definitions.
 pub mod forcefield;
 pub(crate) mod mc;
@@ -610,10 +614,23 @@ pub fn coarse_grain_pdb_with<R: BufRead>(reader: R, policy: &dyn CoarseGrain) ->
 
 /// Coarse-grain PDB or mmCIF, detected from content rather than file name.
 pub fn coarse_grain_bytes(data: &[u8], policy: &dyn CoarseGrain) -> Vec<Bead> {
+    beads_from_parsed(&parse_bytes(data), policy)
+}
+
+/// All parsed atoms, for all-atom views. Same parser and filters (first model,
+/// first altloc, no hydrogens or water) as coarse-graining, which then keeps only
+/// amino acids and metal ions; ligands and nucleic acids appear here but have no bead.
+pub fn atoms_bytes(data: &[u8]) -> Vec<Atom> {
+    parse_bytes(data).atoms
+}
+
+/// One place for format detection and parse options, so atoms and beads can't drift.
+fn parse_bytes(data: &[u8]) -> mmcif::ParsedMmcif {
+    let options = ParseOptions::default();
     if is_mmcif(data) {
-        coarse_grain_with(data, policy)
+        mmcif::parse_mmcif(data, &options)
     } else {
-        coarse_grain_pdb_with(data, policy)
+        pdb::parse_pdb(data, &options)
     }
 }
 
@@ -1552,6 +1569,21 @@ ATOM 14 OXT ALA A 2 6.800 -1.800 0.500 O . 1
         assert!((m.capacitance() - site_sum).abs() < 1e-10);
         assert!(m.dipole_sq >= m.dipole * m.dipole);
         assert!(m.quadrupole_sq >= m.quadrupole * m.quadrupole);
+    }
+
+    #[test]
+    fn atoms_are_read_from_either_format_without_water() {
+        let pdb = "\
+ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.00           C
+HETATM    3  O   HOH A 101       5.000   5.000   5.000  1.00  0.00           O
+END
+";
+        let atoms = atoms_bytes(pdb.as_bytes());
+        assert_eq!(atoms.len(), 2);
+        assert_eq!(atoms[1].name, "CA");
+        assert_eq!((atoms[1].chain_id.as_str(), atoms[1].res_seq), ("A", 1));
+        assert!(!atoms_bytes(TEST_CIF.as_bytes()).is_empty());
     }
 
     #[test]

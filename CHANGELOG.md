@@ -13,7 +13,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
   `quadrupole_std()`.
 - Per-bead charge variance (`ChargeResult::charge_variance`) and optional
   charge snapshots (`ChargeCalc::snapshots`) for visualising fluctuations.
-- `coarse_grain_bytes` detects PDB vs mmCIF from content; `VERSION` constant.
+- `coarse_grain_bytes` and `atoms_bytes` detect PDB vs mmCIF from content; public `Atom`, `bjerrum_length`, `debye_length`; `VERSION` constant.
 - `ChargeCalc::start` returns a seeded, resumable `Titration`, so
   single-threaded callers (wasm) can run MC in chunks with progress.
 
@@ -29,6 +29,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- PDB parsing drops water, as mmCIF already did, and both recognise common MD water
+  names (SOL, TIP3P, …). Beads were unaffected (water never became beads); this
+  only shows in `atoms_bytes`.
 - MC titration no longer zeroes fixed charges (e.g. Zn²⁺) in per-bead output,
   net charge and dipole.
 
