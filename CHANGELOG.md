@@ -6,6 +6,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
 ### Changed
 
 - **Breaking:** default pKa values now follow Thurlkill et al. 2006
@@ -40,5 +42,6 @@ and the project uses [Semantic Versioning](https://semver.org/).
   topology, so pair potentials cover cross-molecule bead pairs. Each molecule is
   still titrated on its own.
 
-[Unreleased]: https://github.com/mlund/cgkitten/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/mlund/cgkitten/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mlund/cgkitten/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/mlund/cgkitten/releases/tag/v0.2.4
