@@ -65,12 +65,16 @@ fn assert_faunus_parses(model: &str, multi_bead: bool) {
     .unwrap()
     .topology;
 
-    let ctx = format!("{model} (multi_bead={multi_bead}):\n{yaml}");
-    let mut topology = Topology::from_str_partial(&yaml).expect(&ctx);
-    topology.finalize_atoms().expect(&ctx);
-    topology.finalize_molecules(Path::new(".")).expect(&ctx);
+    println!("{model} (multi_bead={multi_bead})");
+    assert_faunus_parses_yaml(&yaml);
+}
+
+fn assert_faunus_parses_yaml(yaml: &str) {
+    let mut topology = Topology::from_str_partial(yaml).expect(yaml);
+    topology.finalize_atoms().expect(yaml);
+    topology.finalize_molecules(Path::new(".")).expect(yaml);
     let medium = Medium::salt_water(298.15, Salt::SodiumChloride, 0.1);
-    NonbondedMatrix::from_str(&yaml, &topology, Some(medium)).expect(&ctx);
+    NonbondedMatrix::from_str(yaml, &topology, Some(medium)).expect(yaml);
 }
 
 #[test]
@@ -80,4 +84,28 @@ fn generated_topologies_parse_in_faunus() {
             assert_faunus_parses(model, multi_bead);
         }
     }
+}
+
+/// Cross pairs exist only if both molecules share one topology.
+#[test]
+fn joint_topology_has_cross_pairs() {
+    let other = CIF.replace("LEU", "ALA");
+    let system = cgkitten::coarse_grain_jointly(
+        [(CIF.as_bytes(), false), (other.as_bytes(), false)],
+        &cgkitten::ChargeCalc::new().mc(0),
+        "kimhummer",
+        &cgkitten::SingleBead,
+        0.02,
+        HydrophobicScaling::NoScale,
+        &[] as &[&str],
+    )
+    .unwrap();
+    let yaml = &system.topology;
+    assert!(
+        yaml.contains("[LEU, ALA]") || yaml.contains("[ALA, LEU]"),
+        "{yaml}"
+    );
+    assert!(!system.xyz[1].contains("LEU"), "{}", system.xyz[1]);
+    assert!(system.xyz[1].contains("ALA"), "{}", system.xyz[1]);
+    assert_faunus_parses_yaml(yaml);
 }
