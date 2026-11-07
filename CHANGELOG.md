@@ -6,6 +6,23 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-07
+
+### Added
+
+- `surface` feature (adds `kdtree`; wasm-safe): `surface::gaussian_surface`
+  meshes a Gaussian molecular surface; `potential::SurfacePotential` gives the
+  Debye–Hückel potential φ and its titration spread σ_φ, e.g. one probe radius
+  off a mesh (`on_mesh`); `coloring` has the diverging and sequential maps.
+  Lifted from purrette.
+- `assemble_system` builds the shared topology from molecules titrated by the
+  caller, e.g. incrementally with `ChargeCalc::start`.
+
+### Changed
+
+- Henderson–Hasselbalch ⟨μ⟩ and ⟨‖Θ‖⟩ average sampled site states, as MC does,
+  instead of taking the moments of the mean charges, which are smaller.
+
 ## [0.4.0] - 2026-10-12
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "cgkitten"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Convert mmCIF/PDB protein structures to coarse-grained representation with Monte Carlo titration"
 authors = ["Mikael Lund <lyssky@icloud.com>"]
@@ -15,6 +15,8 @@ keywords = ["bioinformatics", "coarse_grained", "titration", "monte_carlo"]
 default = ["cli"]
 cli = ["dep:clap", "dep:env_logger", "dep:indicatif", "dep:nu-ansi-term", "dep:rayon", "dep:rgb", "dep:textplots"]
 serde = ["dep:serde"]
+# Gaussian molecular surface and its Debye–Hückel potential, for viewers.
+surface = ["dep:kdtree"]
 
 [[bin]]
 name = "cgkitten"
@@ -25,6 +27,7 @@ required-features = ["cli"]
 clap = { version = "4", features = ["derive"], optional = true }
 env_logger = { version = "0.11", optional = true }
 indicatif = { version = "0.17", features = ["rayon"], optional = true }
+kdtree = { version = "0.8", optional = true }
 log = "0.4"
 nu-ansi-term = { version = "0.50", optional = true }
 rand = "0.8"

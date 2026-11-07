@@ -253,6 +253,10 @@ let charged_beads = result.apply(&beads);
 // let calc: ChargeCalc = serde_json::from_str(r#"{"ph": 7.4, "mc": 10000}"#)?;
 ```
 
+With the `surface` feature, `surface::gaussian_surface` meshes the beads and
+`potential::SurfacePotential` evaluates the screened potential φ and its titration
+spread σ_φ on it, e.g. for colouring in a viewer.
+
 ## License
 
 Apache-2.0
