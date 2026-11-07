@@ -18,6 +18,11 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `assemble_system` builds the shared topology from molecules titrated by the
   caller, e.g. incrementally with `ChargeCalc::start`.
 
+### Changed
+
+- Henderson–Hasselbalch ⟨μ⟩ and ⟨‖Θ‖⟩ average sampled site states, as MC does,
+  instead of taking the moments of the mean charges, which are smaller.
+
 ## [0.4.0] - 2026-10-12
 
 ### Added

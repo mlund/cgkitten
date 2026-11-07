@@ -340,7 +340,7 @@ impl Titration {
 /// Multipole moments about the centre of mass, with their squares.
 ///
 /// For Henderson-Hasselbalch the sites are independent, so the squared moments
-/// are exact ensemble averages while the plain ones use mean charges.
+/// are exact ensemble averages; the plain ones average sampled site states.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Multipole {
@@ -408,6 +408,51 @@ impl ChargeResult {
     }
 }
 
+/// Configurations drawn per HH titration for ⟨|μ|⟩ and ⟨‖Θ‖⟩, which, unlike their
+/// squares, have no closed form for independent sites; the means land within ~3 %
+/// of their spread.
+const HH_MOMENT_SAMPLES: usize = 1000;
+
+/// A titratable site's two states, for drawing independent configurations.
+struct SiteStates {
+    bead: usize,
+    deprotonated: f64,
+    /// Protonated, deprotonated.
+    charges: [f64; 2],
+}
+
+impl SiteStates {
+    fn draw(&self, rng: &mut StdRng) -> f64 {
+        self.charges[usize::from(rng.r#gen::<f64>() < self.deprotonated)]
+    }
+}
+
+/// ⟨|μ|⟩ and ⟨‖Θ‖⟩ over sampled site states. Fixed charges' moments are summed once,
+/// so a sample costs O(sites), not O(beads).
+fn sampled_moments(
+    sites: &[SiteStates],
+    charges: &[f64],
+    rel: &[[f64; 3]],
+    rng: &mut StdRng,
+) -> (f64, f64) {
+    let mut fixed_charges = charges.to_vec();
+    for site in sites {
+        fixed_charges[site.bead] = 0.0;
+    }
+    let fixed = Moments::from_charges(fixed_charges.into_iter().zip(rel));
+    let n = HH_MOMENT_SAMPLES as f64;
+    let (mut dipole, mut quadrupole) = (0.0, 0.0);
+    for _ in 0..HH_MOMENT_SAMPLES {
+        let mut m = fixed;
+        for site in sites {
+            m.add(site.draw(rng), &rel[site.bead]);
+        }
+        dipole += m.dipole_sq().sqrt() / n;
+        quadrupole += m.quadrupole_sq().sqrt() / n;
+    }
+    (dipole, quadrupole)
+}
+
 /// Independent-site titration; snapshots are exact independent draws.
 fn henderson_hasselbalch(
     beads: &[Bead],
@@ -445,17 +490,23 @@ fn henderson_hasselbalch(
         theta_var += charge_variance[i] * unit.quadrupole_sq();
     }
     let (mu_sq, theta_sq) = (mean.dipole_sq(), mean.quadrupole_sq());
+    // Per site: bead, deprotonated fraction and the two charges, worked out once
+    // as every sample draws every site.
+    let states: Vec<SiteStates> = sites
+        .iter()
+        .map(|&(i, g)| SiteStates {
+            bead: i,
+            deprotonated: conditions.fraction_deprotonated(g),
+            charges: [g.charge_protonated, g.charge_deprotonated],
+        })
+        .collect();
+    let (dipole, quadrupole) = sampled_moments(&states, &charges, &rel, rng);
 
     let snapshots = (0..num_snapshots)
         .map(|_| {
             let mut q = charges.clone();
-            for &(i, g) in &sites {
-                let deprotonated = rng.r#gen::<f64>() < conditions.fraction_deprotonated(g);
-                q[i] = if deprotonated {
-                    g.charge_deprotonated
-                } else {
-                    g.charge_protonated
-                };
+            for site in &states {
+                q[site.bead] = site.draw(rng);
             }
             q
         })
@@ -465,9 +516,10 @@ fn henderson_hasselbalch(
         multipole: Multipole {
             charge: mean.z,
             charge_sq: mean.z.mul_add(mean.z, z_var),
-            dipole: mu_sq.sqrt(),
+            // Jensen: ⟨|x|⟩ ≤ √⟨x²⟩, exact here; sampling noise mustn't cross it.
+            dipole: dipole.min((mu_sq + mu_var).sqrt()),
             dipole_sq: mu_sq + mu_var,
-            quadrupole: theta_sq.sqrt(),
+            quadrupole: quadrupole.min((theta_sq + theta_var).sqrt()),
             quadrupole_sq: theta_sq + theta_var,
         },
         charges,
@@ -1658,6 +1710,40 @@ END
         assert_eq!(whole.multipole.quadrupole, chunked.multipole.quadrupole);
         assert_eq!(chunked.snapshots.len(), 4);
         assert!(chunked.snapshots.iter().all(|s| s.len() == beads.len()));
+    }
+
+    /// |μ(⟨q⟩)| < ⟨|μ|⟩ < √⟨μ²⟩ (Jensen, strict as sites fluctuate): HH's ⟨μ⟩
+    /// averages configurations, as MC's does, rather than taking the mean charges.
+    #[test]
+    fn hh_dipole_averages_configurations() {
+        let beads = coarse_grain(TEST_CIF.as_bytes());
+        let result = ChargeCalc::new().ph(7.0).start(&beads, 1).finish();
+        let mass: f64 = beads.iter().map(|b| b.mass).sum();
+        let com = [0, 1, 2].map(|k| {
+            beads
+                .iter()
+                .map(|b| b.mass * [b.x, b.y, b.z][k])
+                .sum::<f64>()
+                / mass
+        });
+        let of_mean = [0, 1, 2]
+            .map(|k| {
+                (beads.iter().zip(&result.charges))
+                    .map(|(b, q)| q * ([b.x, b.y, b.z][k] - com[k]))
+                    .sum::<f64>()
+            })
+            .iter()
+            .map(|c| c * c)
+            .sum::<f64>()
+            .sqrt();
+        let m = &result.multipole;
+        assert!(
+            m.dipole > of_mean * 1.0001,
+            "⟨|μ|⟩ {} vs |μ(⟨q⟩)| {of_mean}",
+            m.dipole
+        );
+        assert!(m.dipole < m.dipole_sq.sqrt());
+        assert!(m.quadrupole < m.quadrupole_sq.sqrt());
     }
 
     #[test]
