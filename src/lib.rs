@@ -22,17 +22,23 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) mod charge;
 
+pub use mc::{bjerrum_length, debye_length};
 /// An all-atom record, as parsed from PDB or mmCIF.
 pub use mmcif::AtomRecord as Atom;
-pub use mc::{bjerrum_length, debye_length};
+#[cfg(feature = "surface")]
+pub mod coloring;
 /// Force field model definitions.
 pub mod forcefield;
 pub(crate) mod mc;
 pub(crate) mod mmcif;
 pub(crate) mod moments;
 pub(crate) mod pdb;
+#[cfg(feature = "surface")]
+pub mod potential;
 /// Amino acid residue definitions and constants.
 pub mod residue;
+#[cfg(feature = "surface")]
+pub mod surface;
 /// Topology type assignment for coarse-grained beads.
 pub mod topology;
 
@@ -1070,7 +1076,18 @@ pub fn coarse_grain_jointly<R: BufRead>(
             charge_calc.run(&beads).apply(&beads)
         })
         .collect();
+    assemble_system(&molecules, ff.as_deref(), merge_tolerance)
+}
 
+/// Titrated molecules → one shared topology, as [`coarse_grain_jointly`] ends.
+///
+/// For callers that titrate themselves, e.g. incrementally with [`ChargeCalc::start`].
+/// Beads whose charges differ by less than `merge_tolerance` share an atom kind.
+pub fn assemble_system(
+    molecules: &[Vec<Bead>],
+    ff: Option<&dyn forcefield::ForceField>,
+    merge_tolerance: f64,
+) -> Result<CgSystem, String> {
     let all = molecules.concat();
     let topo = topology::Topology::new(&all, merge_tolerance);
     let multi_bead = all.iter().any(|b| b.bead_type == BeadType::Virtual);
@@ -1087,7 +1104,7 @@ pub fn coarse_grain_jointly<R: BufRead>(
 
     Ok(CgSystem {
         xyz,
-        topology: format_topology(&topo, ff.as_deref(), multi_bead),
+        topology: format_topology(&topo, ff, multi_bead),
     })
 }
 

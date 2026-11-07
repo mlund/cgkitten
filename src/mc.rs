@@ -53,8 +53,18 @@ pub fn debye_length(temperature: f64, ionic_strength: f64) -> f64 {
 
 /// Convert a length to its inverse, treating infinity as zero.
 /// When ionic strength is zero, λ_D → ∞ and 1/λ_D → 0, giving unscreened Coulomb.
-fn inv_length(l: f64) -> f64 {
+pub(crate) fn inv_length(l: f64) -> f64 {
     if l.is_infinite() { 0.0 } else { 1.0 / l }
+}
+
+/// Screened Coulomb e^{−r/λ_D}/r (1/Å). One definition, so the surface potential
+/// is exactly the titration's model; coincident charges don't interact.
+pub(crate) fn yukawa(r: f64, inv_debye: f64) -> f64 {
+    if r > 0.0 {
+        (-r * inv_debye).exp() / r
+    } else {
+        0.0
+    }
 }
 
 /// A titratable site tracked during MC.
@@ -225,11 +235,7 @@ impl TitrationMC {
                             let dy = pos_i[1] - (b.y - com[1]);
                             let dz = pos_i[2] - (b.z - com[2]);
                             let r = dz.mul_add(dz, dx.mul_add(dx, dy * dy)).sqrt();
-                            if r > 0.0 {
-                                b.charge * (-r * inv_debye).exp() / r
-                            } else {
-                                0.0
-                            }
+                            b.charge * yukawa(r, inv_debye)
                         })
                         .sum::<f64>()
             })
@@ -245,11 +251,9 @@ impl TitrationMC {
                 let dy = positions[i][1] - positions[j][1];
                 let dz = positions[i][2] - positions[j][2];
                 let r = dz.mul_add(dz, dx.mul_add(dx, dy * dy)).sqrt();
-                if r > 0.0 {
-                    let k = (-r * inv_debye).exp() / r;
-                    kernel[i * ns + j] = k;
-                    kernel[j * ns + i] = k;
-                }
+                let k = yukawa(r, inv_debye);
+                kernel[i * ns + j] = k;
+                kernel[j * ns + i] = k;
             }
         }
 
