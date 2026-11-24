@@ -84,7 +84,7 @@ Use `--model none` to skip force field parameters entirely.
 |-------|-----------|--------------|-----------|
 | `calvados3` | Ashbaugh-Hatch | `replace:` | [doi:10.1093/database/baz024](https://doi.org/10.1093/database/baz024) |
 | `kimhummer` / `kh` | Kim-Hummer | `replace:`/`append:` | [doi:10.1016/j.jmb.2007.11.063](https://doi.org/10.1016/j.jmb.2007.11.063) |
-| `pasquier` | Lennard-Jones | `replace:`/`append:` | [doi:10.1016/j.jcis.2022.08.054](https://doi.org/10.1016/j.jcis.2022.08.054) |
+| `pasquier` | Lennard-Jones (as Ashbaugh-Hatch, λ = 1) | `replace:`/`append:` | [doi:10.1016/j.jcis.2022.08.054](https://doi.org/10.1016/j.jcis.2022.08.054) |
 
 ```bash
 cgkitten structure.cif convert --model kimhummer
@@ -93,6 +93,11 @@ cgkitten structure.cif convert --model kimhummer
 **Pasquier**: LJ interactions using Kim-Hummer sigma values and two epsilon classes
 (open conformation): epsilon_hh = 0.485 kT for hydrophobic-hydrophobic pairs,
 epsilon = 0.005 kT for all other pairs.
+
+The short-range pair terms are cut and shifted to zero at a finite range: Calvados 3
+at its published 20 Å, Kim-Hummer and Pasquier at `forcefield::MODEL_RANGE`
+(provisional 30 Å; both papers use the untruncated potential, so B₂ shifts somewhat).
+Charged pairs under `append:` also inherit whatever range the input's default has.
 
 ### Hydrophobic scaling
 

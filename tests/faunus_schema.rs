@@ -1,9 +1,13 @@
 //! Generated topologies are written by hand-formatted strings, so nothing ties them to
 //! faunus' input schema. Parse them with faunus here so schema changes fail CI, not users.
 
-use cgkitten::forcefield::HydrophobicScaling;
-use faunus::energy::NonbondedMatrix;
-use faunus::interatomic::coulomb::{Medium, Salt};
+use cgkitten::forcefield::{self, ForceField, HydrophobicScaling};
+use faunus::energy::{NonbondedMatrix, PairPot};
+use faunus::interatomic::{
+    Cutoff,
+    coulomb::{Medium, Salt},
+    twobody::IsotropicTwobodyEnergy,
+};
 use faunus::topology::Topology;
 use std::path::Path;
 
@@ -45,14 +49,14 @@ ATOM 19 O GLU A 4 12.400 -5.800 0.000 O . 1
 ATOM 20 OE1 GLU A 4 12.300 -2.300 1.200 O . 1
 "#;
 
-fn assert_faunus_parses(model: &str, multi_bead: bool) {
+fn topology_yaml(model: &str, multi_bead: bool) -> String {
     let policy: &dyn cgkitten::CoarseGrain = if multi_bead {
         &cgkitten::MultiBead
     } else {
         &cgkitten::SingleBead
     };
     // No MC sweeps: deterministic charges are enough to exercise the schema.
-    let yaml = cgkitten::coarse_grain_to_strings(
+    cgkitten::coarse_grain_to_strings(
         CIF.as_bytes(),
         false,
         &cgkitten::ChargeCalc::new().mc(0),
@@ -63,25 +67,42 @@ fn assert_faunus_parses(model: &str, multi_bead: bool) {
         &[] as &[&str],
     )
     .unwrap()
-    .topology;
-
-    println!("{model} (multi_bead={multi_bead})");
-    assert_faunus_parses_yaml(&yaml);
+    .topology
 }
 
-fn assert_faunus_parses_yaml(yaml: &str) {
+fn nonbonded(yaml: &str, medium: Option<Medium>) -> NonbondedMatrix {
     let mut topology = Topology::from_str_partial(yaml).expect(yaml);
     topology.finalize_atoms().expect(yaml);
     topology.finalize_molecules(Path::new(".")).expect(yaml);
-    let medium = Medium::salt_water(298.15, Salt::SodiumChloride, 0.1);
-    NonbondedMatrix::from_str(yaml, &topology, Some(medium)).expect(yaml);
+    NonbondedMatrix::from_str(yaml, &topology, medium).expect(yaml)
+}
+
+fn assert_faunus_parses_yaml(yaml: &str) {
+    nonbonded(
+        yaml,
+        Some(Medium::salt_water(298.15, Salt::SodiumChloride, 0.1)),
+    );
+}
+
+/// Every pair of the model, without the medium's Coulomb term.
+fn short_range_pairs(model: &str) -> Vec<PairPot> {
+    let matrix = nonbonded(&topology_yaml(model, false), None);
+    matrix.get_potentials().iter().cloned().collect()
+}
+
+fn range_of(model: &str) -> f64 {
+    let ff: Box<dyn ForceField> = forcefield::from_name(model, HydrophobicScaling::NoScale)
+        .unwrap()
+        .unwrap();
+    ff.range()
 }
 
 #[test]
 fn generated_topologies_parse_in_faunus() {
     for model in ["calvados3", "kimhummer", "pasquier"] {
         for multi_bead in [false, true] {
-            assert_faunus_parses(model, multi_bead);
+            println!("{model} (multi_bead={multi_bead})");
+            assert_faunus_parses_yaml(&topology_yaml(model, multi_bead));
         }
     }
 }
@@ -108,4 +129,20 @@ fn joint_topology_has_cross_pairs() {
     assert!(!system.xyz[1].contains("LEU"), "{}", system.xyz[1]);
     assert!(system.xyz[1].contains("ALA"), "{}", system.xyz[1]);
     assert_faunus_parses_yaml(yaml);
+}
+
+/// C1: pairs are cut and shifted at the model's range, so consumers splining over
+/// it lose nothing and see no jump.
+#[test]
+fn pairs_vanish_continuously_at_the_model_range() {
+    for model in ["calvados3", "kimhummer", "pasquier"] {
+        let range = range_of(model);
+        for pair in short_range_pairs(model) {
+            assert_eq!(pair.cutoff(), range, "{model}: {pair:?}");
+            assert!(!pair.has_coulomb(), "{model}: {pair:?}");
+            let u = pair.isotropic_twobody_energy((range - 1e-6).powi(2));
+            assert!(u.abs() < 1e-9, "{model}: u = {u} at the range, {pair:?}");
+            assert_eq!(pair.isotropic_twobody_energy(range.powi(2)), 0.0);
+        }
+    }
 }

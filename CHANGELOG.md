@@ -6,6 +6,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Kim-Hummer and Pasquier pairs are cut and shifted at `forcefield::MODEL_RANGE`,
+  so every generated pair has a finite range. Pasquier pairs are written as
+  `!AshbaughHatch` with λ = 1, since bare `!LennardJones` has no cutoff.
+  This changes the physics: wells are shifted and the tail beyond the range is
+  gone, so B₂ differs from 0.5.0 output. The 30 Å value is provisional.
+
 ## [0.5.0] - 2026-11-07
 
 ### Added
