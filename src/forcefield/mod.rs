@@ -12,6 +12,11 @@ pub use calvados3::Calvados3;
 pub use kimhummer::KimHummer;
 pub use pasquier::Pasquier;
 
+/// Interaction range (Å) of the Kim–Hummer and Pasquier pair potentials; zero beyond.
+/// A finite range lets consumers spline and cull pairs without a cutoff of their own.
+/// Provisional: the published models are untruncated, and B₂ still drifts past 30 Å.
+pub const MODEL_RANGE: f64 = 30.0;
+
 /// Per-bead force field parameters.
 #[derive(Clone, Copy)]
 pub struct BeadParams {
@@ -47,6 +52,42 @@ pub trait ForceField {
     /// Complete `\nsystem:\n  energy:\n    - !Nonbonded\n...` YAML block.
     /// `types` provides (name, charge, params) for each atom type in the system.
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String;
+
+    /// Interaction range (Å) of every emitted short-range pair; zero beyond.
+    fn range(&self) -> f64;
+}
+
+/// Pair sections split by charge: neutral pairs under `replace:` skip a redundant
+/// Coulomb(0×0); charged pairs under `append:` inherit Coulomb from the input's default.
+/// `potential` gives each pair's tag and fields; the range is appended here so no
+/// model can emit an unbounded pair.
+fn charge_split_pairs_yaml(
+    types: &[(&str, f64, BeadParams)],
+    range: f64,
+    potential: impl Fn(&BeadParams, &BeadParams) -> (&'static str, String),
+) -> String {
+    let mut replace = String::new();
+    let mut append = String::new();
+    for (i, (na, qa, pa)) in types.iter().enumerate() {
+        for (nb, qb, pb) in &types[i..] {
+            let (tag, fields) = potential(pa, pb);
+            let section = if qa.abs() < f64::EPSILON && qb.abs() < f64::EPSILON {
+                &mut replace
+            } else {
+                &mut append
+            };
+            section.push_str(&format!(
+                "        [{na}, {nb}]:\n          - !{tag} {{{fields}, cutoff: {range}}}\n"
+            ));
+        }
+    }
+    let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n".to_string();
+    for (name, body) in [("replace", replace), ("append", append)] {
+        if !body.is_empty() {
+            yaml.push_str(&format!("      {name}:\n{body}"));
+        }
+    }
+    yaml
 }
 
 /// Hydrophobic scaling policy for nonbonded pair overrides.

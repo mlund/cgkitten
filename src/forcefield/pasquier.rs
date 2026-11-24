@@ -9,7 +9,7 @@
 //! Note: σ values are taken from Kim & Hummer rather than the original
 //! Pasquier model.
 
-use super::{BeadParams, ForceField, HydrophobicScaling};
+use super::{BeadParams, ForceField, HydrophobicScaling, MODEL_RANGE, charge_split_pairs_yaml};
 use crate::BeadType;
 
 const R_KJ_PER_MOL: f64 = 8.314462618e-3;
@@ -88,56 +88,30 @@ impl ForceField for Pasquier {
     }
 
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String {
-        let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n".to_string();
-
-        // Neutral pairs → replace (skip redundant Coulomb), charged → append (inherit Coulomb)
-        let mut replace_pairs = Vec::new();
-        let mut append_pairs = Vec::new();
-
-        for (i, (na, qa, pa)) in types.iter().enumerate() {
-            for (nb, qb, pb) in &types[i..] {
-                let sigma = (pa.sigma + pb.sigma) / 2.0;
-                let is_hh = pa.is_hydrophobic() && pb.is_hydrophobic();
-
-                let mut epsilon_kt = if is_hh {
-                    EPSILON_HH_KT
-                } else {
-                    EPSILON_OTHER_KT
-                };
-
-                if let HydrophobicScaling::ScaleEpsilon(c) = &self.scaling
-                    && is_hh
-                {
-                    epsilon_kt *= c;
-                }
-
-                let epsilon = epsilon_kt * KT_TO_KJ_MOL;
-                let entry = format!(
-                    "        [{na}, {nb}]:\n          \
-                     - !LennardJones {{sigma: {sigma}, epsilon: {epsilon:.4}}}\n"
-                );
-
-                if qa.abs() < f64::EPSILON && qb.abs() < f64::EPSILON {
-                    replace_pairs.push(entry);
-                } else {
-                    append_pairs.push(entry);
-                }
+        charge_split_pairs_yaml(types, self.range(), |pa, pb| {
+            let sigma = (pa.sigma + pb.sigma) / 2.0;
+            let is_hh = pa.is_hydrophobic() && pb.is_hydrophobic();
+            let mut epsilon_kt = if is_hh {
+                EPSILON_HH_KT
+            } else {
+                EPSILON_OTHER_KT
+            };
+            if let HydrophobicScaling::ScaleEpsilon(c) = &self.scaling
+                && is_hh
+            {
+                epsilon_kt *= c;
             }
-        }
+            let epsilon = epsilon_kt * KT_TO_KJ_MOL;
+            // Bare !LennardJones has no range; AH with λ = 1 is LJ cut and shifted.
+            (
+                "AshbaughHatch",
+                format!("sigma: {sigma}, epsilon: {epsilon:.4}, lambda: 1.0"),
+            )
+        })
+    }
 
-        if !replace_pairs.is_empty() {
-            yaml.push_str("      replace:\n");
-            for entry in &replace_pairs {
-                yaml.push_str(entry);
-            }
-        }
-        if !append_pairs.is_empty() {
-            yaml.push_str("      append:\n");
-            for entry in &append_pairs {
-                yaml.push_str(entry);
-            }
-        }
-        yaml
+    fn range(&self) -> f64 {
+        MODEL_RANGE
     }
 }
 
@@ -207,5 +181,6 @@ mod tests {
         let yaml = ff.nonbonded_yaml(&types);
         assert!(yaml.contains("replace:"));
         assert!(yaml.contains("append:"));
+        assert!(yaml.contains(&format!("lambda: 1.0, cutoff: {MODEL_RANGE}}}")));
     }
 }

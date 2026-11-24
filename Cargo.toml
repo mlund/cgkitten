@@ -38,4 +38,4 @@ textplots = { version = "0.8", optional = true }
 
 [dev-dependencies]
 # Schema guard: generated topology YAML must parse in faunus (tests/faunus_schema.rs).
-faunus = { git = "https://github.com/mlund/faunus-rs.git", default-features = false }
+faunus = { git = "https://github.com/mlund/faunus-rs.git", rev = "76926c5", default-features = false }

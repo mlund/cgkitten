@@ -17,6 +17,9 @@ impl Calvados3 {
     }
 }
 
+/// Published Ashbaugh-Hatch range (Å).
+const RANGE: f64 = 20.0;
+
 // Masses are free amino acid mass minus one water (18.02 Da) per peptide bond.
 const RESIDUES: &[(&str, f64, f64, f64, f64)] = &[
     ("ALA", 71.07, 0.3377244362031627, 5.04, 0.8368),
@@ -76,10 +79,11 @@ impl ForceField for Calvados3 {
     }
 
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String {
-        let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n      \
+        let mut yaml = format!(
+            "\nsystem:\n  energy:\n    - !Nonbonded\n      \
             # A Coulomb term is automatically added\n      \
-            default:\n        - !AshbaughHatch {mixing: arithmetic, cutoff: 20.0}\n"
-            .to_string();
+            default:\n        - !AshbaughHatch {{mixing: arithmetic, cutoff: {RANGE}}}\n"
+        );
 
         // Hydrophobic residues are all neutral, so `replace:` is safe —
         // no Coulomb interaction to inherit from default.
@@ -89,11 +93,15 @@ impl ForceField for Calvados3 {
             for (na, nb, sigma, epsilon, lambda) in &pairs {
                 yaml.push_str(&format!(
                     "        [{na}, {nb}]:\n          \
-                     - !AshbaughHatch {{σ: {sigma:.4}, ε: {epsilon:.4}, λ: {lambda:.4}, cutoff: 20.0}}\n"
+                     - !AshbaughHatch {{σ: {sigma:.4}, ε: {epsilon:.4}, λ: {lambda:.4}, cutoff: {RANGE}}}\n"
                 ));
             }
         }
         yaml
+    }
+
+    fn range(&self) -> f64 {
+        RANGE
     }
 }
 

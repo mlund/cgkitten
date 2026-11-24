@@ -4,7 +4,7 @@
 //! - Miyazawa & Jernigan (1996), <https://doi.org/10.1006/jmbi.1996.0114>
 //! - Parameters from <https://github.com/bio-phys/complexespp>
 
-use super::{BeadParams, ForceField, HydrophobicScaling};
+use super::{BeadParams, ForceField, HydrophobicScaling, MODEL_RANGE, charge_split_pairs_yaml};
 use crate::BeadType;
 
 const R_KJ_PER_MOL: f64 = 8.314462618e-3; // kJ/(mol·K)
@@ -113,51 +113,24 @@ impl ForceField for KimHummer {
     }
 
     fn nonbonded_yaml(&self, types: &[(&str, f64, BeadParams)]) -> String {
-        let mut yaml = "\nsystem:\n  energy:\n    - !Nonbonded\n".to_string();
-
-        // Neutral pairs go under `replace:` to skip redundant Coulomb(0×0) evaluation.
-        // Charged pairs go under `append:` to inherit Coulomb from the input's default.
-        let mut replace_pairs = Vec::new();
-        let mut append_pairs = Vec::new();
-
-        for (i, (na, qa, pa)) in types.iter().enumerate() {
-            for (nb, qb, pb) in &types[i..] {
-                let sigma = (pa.sigma + pb.sigma) / 2.0;
-                let mut epsilon = pair_epsilon(pa, pb);
-
-                if let HydrophobicScaling::ScaleEpsilon(c) = &self.scaling
-                    && pa.is_hydrophobic()
-                    && pb.is_hydrophobic()
-                {
-                    epsilon *= c;
-                }
-
-                let entry = format!(
-                    "        [{na}, {nb}]:\n          \
-                     - !KimHummer {{sigma: {sigma}, epsilon: {epsilon:.4}}}\n"
-                );
-
-                if qa.abs() < f64::EPSILON && qb.abs() < f64::EPSILON {
-                    replace_pairs.push(entry);
-                } else {
-                    append_pairs.push(entry);
-                }
+        charge_split_pairs_yaml(types, self.range(), |pa, pb| {
+            let sigma = (pa.sigma + pb.sigma) / 2.0;
+            let mut epsilon = pair_epsilon(pa, pb);
+            if let HydrophobicScaling::ScaleEpsilon(c) = &self.scaling
+                && pa.is_hydrophobic()
+                && pb.is_hydrophobic()
+            {
+                epsilon *= c;
             }
-        }
+            (
+                "KimHummer",
+                format!("sigma: {sigma}, epsilon: {epsilon:.4}"),
+            )
+        })
+    }
 
-        if !replace_pairs.is_empty() {
-            yaml.push_str("      replace:\n");
-            for entry in &replace_pairs {
-                yaml.push_str(entry);
-            }
-        }
-        if !append_pairs.is_empty() {
-            yaml.push_str("      append:\n");
-            for entry in &append_pairs {
-                yaml.push_str(entry);
-            }
-        }
-        yaml
+    fn range(&self) -> f64 {
+        MODEL_RANGE
     }
 }
 
@@ -230,7 +203,7 @@ mod tests {
         let tyr = kh.params("TYR", BeadType::Titratable).unwrap();
         let yaml = kh.nonbonded_yaml(&[("CYX", 0.0, cys), ("TYR1", -0.1, tyr)]);
         let expected = format!(
-            "[CYX, TYR1]:\n          - !KimHummer {{sigma: {}, epsilon: {:.4}}}",
+            "[CYX, TYR1]:\n          - !KimHummer {{sigma: {}, epsilon: {:.4}, cutoff: {MODEL_RANGE}}}",
             (cys.sigma + tyr.sigma) / 2.0,
             pair_epsilon(&cys, &tyr)
         );
